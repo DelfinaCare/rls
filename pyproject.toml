@@ -23,6 +23,7 @@ sqlalchemy = "2.0.34"
 starlette = "0.38.5"
 typing-extensions = "4.12.2"
 asyncpg = "^0.29.0"
+once-py = "^0.0.6"
 
 
 [tool.poetry.group.dev.dependencies]

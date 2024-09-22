@@ -462,6 +462,16 @@ files = [
 ]
 
 [[package]]
+name = "once-py"
+version = "0.0.6"
+description = "Utility for initialization ensuring functions are called only once"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "once_py-0.0.6-py3-none-any.whl", hash = "sha256:9e754f76e0fe9379ff7a18c375eea1d3389f0a5ae02843efa0964440d0ce7278"},
+]
+
+[[package]]
 name = "packaging"
 version = "24.1"
 description = "Core utilities for Python packages"
@@ -916,4 +926,4 @@ test = ["covdefaults (>=2.3)", "coverage (>=7.2.7)", "coverage-enable-subprocess
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.11"
-content-hash = "837f3c2f56ebfba5f3d6237b7b1f115a4c73d18c2d72172ee8e3caa1a07fdcec"
+content-hash = "46fb472d8fb7300f88d35a16c846aaeadf2161c09efd922aa801ba43e825ccf7"
