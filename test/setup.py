@@ -1,15 +1,13 @@
 # sync_setup.py
-from sqlalchemy import create_engine
-from .models import Base
+from engines import admin_engine as engine
+from models import RlsBase
 
-DATABASE_URL = "postgresql://user:password@localhost/session"
-# Use a synchronous engine for schema creation
-engine = create_engine(DATABASE_URL)
+print("Setting up database")
 
 
 def setup_database():
     # Create tables
-    Base.metadata.create_all(engine)
+    RlsBase.metadata.create_all(engine)
 
 
 if __name__ == "__main__":
