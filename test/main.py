@@ -4,9 +4,9 @@ from sqlalchemy.future import select
 
 
 from rls.database import get_session, bypass_rls_async
-from models import Item
+from .models import Item
 
-from engines import async_engine as db_engine
+from .engines import async_engine as db_engine
 
 
 app = FastAPI()
@@ -26,6 +26,6 @@ async def get_users(db: AsyncSession = Session):
 @app.get("/admin/items")
 async def get_items(db: AsyncSession = Session):
     stmt = select(Item)
-    results=await bypass_rls_async(db,[stmt])
+    results = await bypass_rls_async(db, [stmt])
     items = results[0].scalars().all()
     return items

@@ -33,16 +33,30 @@ class Item(RlsBase):
 
     __rls_policies__ = [
         Permissive(
-            condition_args={
-                "comparator_name": "sub",
-                "comparator_source": ComparatorSource.bearerTokenPayload,
-                "operation": Operation.equality,
-                "type": ExpressionTypes.integer,
-                "column_name": "owner_id",
-                # "expr": "&column_name& = current_setting('&comparator_name&')::UUID"
-                # TODO: how to parse the comparator name from expr
-                # IDEA: may give us a custom function to parse from the comparator he customized
-            },
+            condition_args=[
+                {
+                    "comparator_name": "sub",
+                    "comparator_source": ComparatorSource.bearerTokenPayload,
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.integer,
+                    "column_name": "owner_id",
+                },
+                {
+                    "comparator_name": "title",
+                    "comparator_source": ComparatorSource.bearerTokenPayload,
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.text,
+                    "column_name": "title",
+                },
+                {
+                    "comparator_name": "description",
+                    "comparator_source": ComparatorSource.bearerTokenPayload,
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.text,
+                    "column_name": "description",
+                },
+            ],
             cmd=[Command.all],
+            expr="{0} AND ({1} OR {2})",
         )
     ]

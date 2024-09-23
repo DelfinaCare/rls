@@ -1,20 +1,19 @@
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, AsyncEngine
-from sqlalchemy import text,Result
+from sqlalchemy import text, Result
 from sqlalchemy.sql import Executable
-from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.engine import Engine
 
 import once
 import logging
 import base64
 import json
-from typing import Optional, List, Union
+from typing import Optional, List
 
 from fastapi import Request
 
-from rls.schemas import Policy, ComparatorSource
+from rls.schemas import Policy, ComparatorSource, ExpressionTypes
 
 # --------------------------------------Set RLS variables-----------------------------#
 
@@ -78,7 +77,7 @@ def _get_nested_value(dictionary: dict, keys: list[str]):
     return value
 
 
-def _get_set_statements(req: Request) -> Optional[TextClause]:
+def _get_set_statements(req: Request) -> Optional[List[Executable]]:
     # must be setup for the rls_policies key to be set
     queries = []
 
@@ -91,42 +90,53 @@ def _get_set_statements(req: Request) -> Optional[TextClause]:
         policies: list[Policy] = mapper.class_.__rls_policies__
 
         for policy in policies:
-            db_var_name = policy.get_db_var_name(table_name)
+            for idx in range(len(policy.condition_args)):
+                db_var_name = policy.get_db_var_name(table_name, idx)
 
-            comparator_name = policy.condition_args["comparator_name"]
-            comparator_name_split = comparator_name.split(".")
+                comparator_name = policy.condition_args[idx]["comparator_name"]
+                comparator_name_split = comparator_name.split(".")
 
-            comparator_value = None
-            if (
-                policy.condition_args["comparator_source"]
-                == ComparatorSource.bearerTokenPayload
-            ):
-                comparator_value = _get_nested_value(
-                    _parse_bearer_token(req.headers.get("Authorization")),
-                    comparator_name_split,
-                )
-            elif (
-                policy.condition_args["comparator_source"]
-                == ComparatorSource.requestUser
-            ):
-                comparator_value = _get_nested_value(req.user, comparator_name_split)
-            elif policy.condition_args["comparator_source"] == ComparatorSource.header:
-                comparator_value = _get_nested_value(req.headers, comparator_name_split)
-            else:
-                raise ValueError("Invalid Comparator Source")
+                comparator_value = None
+                if (
+                    policy.condition_args[idx]["comparator_source"]
+                    == ComparatorSource.bearerTokenPayload
+                ):
+                    comparator_value = _get_nested_value(
+                        _parse_bearer_token(req.headers.get("Authorization")),
+                        comparator_name_split,
+                    )
+                elif (
+                    policy.condition_args[idx]["comparator_source"]
+                    == ComparatorSource.requestUser
+                ):
+                    comparator_value = _get_nested_value(
+                        req.user, comparator_name_split
+                    )
+                elif (
+                    policy.condition_args["comparator_source"]
+                    == ComparatorSource.header
+                ):
+                    comparator_value = _get_nested_value(
+                        req.headers, comparator_name_split
+                    )
+                else:
+                    raise ValueError("Invalid Comparator Source")
 
-            if comparator_value is None:
-                continue
+                if comparator_value is None:
+                    continue
 
-            temp_query = f"SET LOCAL {db_var_name} = {comparator_value};"
+                type = policy.condition_args[idx]["type"]
+                if type != ExpressionTypes.integer:
+                    comparator_value = f"'{comparator_value}'"
 
-            queries.append(temp_query)
+                temp_query = text(f"SET LOCAL {db_var_name} = {comparator_value};")
+
+                queries.append(temp_query)
 
     if len(queries) == 0:
         return None
-    combined_query = text("\n".join(queries))  # Combine queries into a single string
 
-    return combined_query
+    return queries
 
 
 # --------------------------------------RlsBase Initialization-----------------------------#
@@ -182,7 +192,8 @@ def get_sync_session(request: Request):
     with SyncSessionLocal() as session:
         stmts = _get_set_statements(request)
         if stmts is not None:
-            session.execute(stmts)
+            for stmt in stmts:
+                session.execute(stmt)
         yield session
 
 
@@ -191,21 +202,24 @@ async def get_async_session(request: Request):
     async with AsyncSessionLocal() as session:
         stmts = _get_set_statements(request)
         if stmts is not None:
-            await session.execute(stmts)
+            for stmt in stmts:
+                await session.execute(stmt)
         yield session
 
 
-async def bypass_rls_async(session:AsyncSession,stmts:List[Executable])->List[Result]:
-    results=[]
+async def bypass_rls_async(
+    session: AsyncSession, stmts: List[Executable]
+) -> List[Result]:
+    results = []
     await session.execute(text("SET row_security=off;"))
     for stmt in stmts:
         results.append(await session.execute(stmt))
     await session.execute(text("SET row_security=on;"))
     return results
-        
-        
-def bypass_rls_sync(session:Session,stmts:List[Executable])->List[Result]:
-    results=[]
+
+
+def bypass_rls_sync(session: Session, stmts: List[Executable]) -> List[Result]:
+    results = []
     session.execute(text("SET row_security=off;"))
     for stmt in stmts:
         results.append(session.execute(stmt))

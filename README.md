@@ -52,13 +52,13 @@ class Item(Base):
 
     __rls_policies__ = [
         Permissive(
-            condition_args={
+            condition_args=[{
                 "comparator_name": "user_id",
                 "comparator_source": ComparatorSource.bearerTokenPayload,
                 "operation": Operation.equality,
                 "type": ExpressionTypes.integer,
                 "column_name": "owner_id",
-            },
+            }],
             cmd=[Command.all],
         )
     ]
@@ -91,6 +91,47 @@ async def get_users(db: AsyncSession = Session):
     return items
 
 ```
+
+#### Custom expression
+
+The user gives us a parametrized expression and array of conidition_args
+
+```python
+    __rls_policies__ = [
+        Permissive(
+            condition_args=[
+                {
+                "comparator_name": "sub",
+                "comparator_source": ComparatorSource.bearerTokenPayload,
+                "operation": Operation.equality,
+                "type": ExpressionTypes.integer,
+                "column_name": "owner_id",
+                },
+                {
+                "comparator_name": "title",
+                "comparator_source": ComparatorSource.bearerTokenPayload,
+                "operation": Operation.equality,
+                "type": ExpressionTypes.text,
+                "column_name": "title",
+                },
+                {
+                "comparator_name": "description",
+                "comparator_source": ComparatorSource.bearerTokenPayload,
+                "operation": Operation.equality,
+                "type": ExpressionTypes.text,
+                "column_name": "description",
+                },
+            ],
+            cmd=[Command.all],
+            expr= "{0} AND ({1} OR {2})",
+        )
+    ]
+```
+
+you can pass multiple expressions and in the `expr` field specify their joining conditions.
+#### `Note`:
+- the valid logical joining operators as of now are `AND` and `OR`
+- if no `expr` is given only the first policy in the array of `condition_args` is taken
 
 #### Run Tests
 
