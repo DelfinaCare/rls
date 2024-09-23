@@ -1,7 +1,8 @@
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, AsyncEngine
-from sqlalchemy import text
+from sqlalchemy import text,Result
+from sqlalchemy.sql import Executable
 from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.engine import Engine
 
@@ -9,7 +10,7 @@ import once
 import logging
 import base64
 import json
-from typing import Optional
+from typing import Optional, List, Union
 
 from fastapi import Request
 
@@ -192,3 +193,21 @@ async def get_async_session(request: Request):
         if stmts is not None:
             await session.execute(stmts)
         yield session
+
+
+async def bypass_rls_async(session:AsyncSession,stmts:List[Executable])->List[Result]:
+    results=[]
+    await session.execute(text("SET row_security=off;"))
+    for stmt in stmts:
+        results.append(await session.execute(stmt))
+    await session.execute(text("SET row_security=on;"))
+    return results
+        
+        
+def bypass_rls_sync(session:Session,stmts:List[Executable])->List[Result]:
+    results=[]
+    session.execute(text("SET row_security=off;"))
+    for stmt in stmts:
+        results.append(session.execute(stmt))
+    session.execute(text("SET row_security=on;"))
+    return results
