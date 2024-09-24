@@ -1,5 +1,4 @@
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, AsyncEngine
 from sqlalchemy import text, Result
 from sqlalchemy.sql import Executable
@@ -96,26 +95,23 @@ def _get_set_statements(req: Request) -> Optional[List[Executable]]:
                 comparator_name = policy.condition_args[idx]["comparator_name"]
                 comparator_name_split = comparator_name.split(".")
 
+                comparator_source = policy.condition_args[idx]["comparator_source"]
+
+                print("^^^^^^^^^^^^^^^^^^^^^^^")
+                print(comparator_source)
+                print("^^^^^^^^^^^^^^^^^^^^^^^")
+
                 comparator_value = None
-                if (
-                    policy.condition_args[idx]["comparator_source"]
-                    == ComparatorSource.bearerTokenPayload
-                ):
+                if comparator_source == ComparatorSource.bearerTokenPayload:
                     comparator_value = _get_nested_value(
                         _parse_bearer_token(req.headers.get("Authorization")),
                         comparator_name_split,
                     )
-                elif (
-                    policy.condition_args[idx]["comparator_source"]
-                    == ComparatorSource.requestUser
-                ):
+                elif comparator_source == ComparatorSource.requestUser:
                     comparator_value = _get_nested_value(
                         req.user, comparator_name_split
                     )
-                elif (
-                    policy.condition_args["comparator_source"]
-                    == ComparatorSource.header
-                ):
+                elif comparator_source == ComparatorSource.header:
                     comparator_value = _get_nested_value(
                         req.headers, comparator_name_split
                     )

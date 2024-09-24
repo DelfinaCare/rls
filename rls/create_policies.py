@@ -15,16 +15,9 @@ def create_policies(Base: Type[DeclarativeMeta], connection: Connection):
         stmt = text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")
         connection.execute(stmt)
         # policies
-        print("SETTINGS", settings)
         for ix, policy in enumerate(settings):
-            print("*************************")
-            print("POLICY", policy)
-            print("*************************")
             for pol_stmt in policy.get_sql_policies(
                 table_name=table, name_suffix=str(ix)
             ):
-                print("*************************")
-                print(pol_stmt)
-                print("*************************")
                 connection.execute(pol_stmt)
     connection.commit()

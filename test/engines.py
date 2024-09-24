@@ -8,3 +8,4 @@ ADMIN_DATABASE_URL = "postgresql://user:password@localhost/session"
 async_engine = create_async_engine(ASYNC_DATABASE_URL)
 sync_engine = create_engine(SYNC_DATABASE_URL)
 admin_engine = create_engine(ADMIN_DATABASE_URL)
+setup_engine = create_engine(ADMIN_DATABASE_URL)
