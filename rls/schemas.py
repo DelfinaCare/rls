@@ -59,6 +59,7 @@ class Policy(BaseModel):
     joined_expr: Optional[str] = None
     custom_expr: Optional[str] = None
 
+    __policy_names: List[str] = []
     __expr: str = None
     __policy_suffix: int = 0
 
@@ -141,6 +142,16 @@ class Policy(BaseModel):
                         "comparator_name, comparator_source and type must be provided if custom_expr is provided with parameters"
                     )
 
+    @property
+    def policy_names(self) -> str:
+        """Getter for the private __policy_name field."""
+        return self.__policy_names
+
+    @property
+    def expression(self) -> str:
+        """Getter for the private __expr field."""
+        return self.__expr
+
     def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
         self.__policy_suffix = name_suffix
@@ -166,6 +177,7 @@ class Policy(BaseModel):
                 f"{table_name}_{self.definition}"
                 f"_{cmd_value}_policy_{self.__policy_suffix}".lower()
             )
+            self.__policy_names.append(policy_name)
 
             if cmd_value in ["ALL", "SELECT", "UPDATE", "DELETE"]:
                 policy_lists.append(
