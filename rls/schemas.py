@@ -38,15 +38,8 @@ class ExpressionTypes(str, Enum):
     boolean = "BOOLEAN"
 
 
-class ComparatorSource(str, Enum):
-    header = "header"
-    bearerTokenPayload = "bearer_token_payload"
-    requestUser = "request_user"
-
-
 class ConditionArgs(TypedDict):
     comparator_name: str
-    comparator_source: ComparatorSource
     type: ExpressionTypes
     operation: NotRequired[Optional[Operation]] = None
     column_name: NotRequired[Optional[str]] = None
@@ -63,25 +56,11 @@ class Policy(BaseModel):
     __expr: str = None
     __policy_suffix: int = 0
 
-    def get_db_var_name(self, table_name: str, idx: int = 0):
-        var_name = None
-        if "column_name" not in self.condition_args[idx]:
-            var_name = (
-                self.condition_args[idx]["comparator_name"]
-                + "_"
-                + self.condition_args[idx]["comparator_source"]
-            )
-        else:
-            var_name = self.condition_args[idx]["column_name"]
-        return (
-            f"rls.{table_name}_{var_name}_condition_{idx}_policy_{self.__policy_suffix}"
-        )
-
-    def _get_safe_variable_name(self, table_name: str, idx: int = 0):
-        return f"NULLIF(current_setting('{self.get_db_var_name(table_name=table_name, idx=idx)}', true),'')::{self.condition_args[idx]['type'].value}"
+    def _get_safe_variable_name(self, idx: int = 0):
+        return f"NULLIF(current_setting('rls.{self.condition_args[idx]["comparator_name"]}', true),'')::{self.condition_args[idx]['type'].value}"
 
     def _get_expr_from_params(self, table_name: str, idx: int = 0):
-        safe_variable_name = self._get_safe_variable_name(table_name, idx)
+        safe_variable_name = self._get_safe_variable_name(idx=idx)
 
         expr = f"{self.condition_args[idx]['column_name']} {self.condition_args[idx]['operation'].value} {safe_variable_name}"
 
@@ -98,7 +77,7 @@ class Policy(BaseModel):
     def _get_expr_from_custom_expr(self, table_name: str):
         expr = self.custom_expr
         for idx in range(len(self.condition_args)):
-            safe_variable_name = self._get_safe_variable_name(table_name, idx)
+            safe_variable_name = self._get_safe_variable_name(idx=idx)
             pattern = rf"\{{{idx}\}}"
             expr = re.sub(pattern, safe_variable_name, expr)
         return expr

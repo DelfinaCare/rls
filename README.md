@@ -1,43 +1,52 @@
-# Fastapi RLS
+# rls
 
-a package to provide row level security seamlessly to you `fastapi` app by extending `sqlalchemy`.
+a package to provide row level security seamlessly to your python app by extending `sqlalchemy` and `alembic`.
+
+---
 
 ## Installation
 
-#### Package
-
-Not done yet
-
-#### Source Code
-
-After cloning the repo
-
-install dependencies using poetry
+### Package
 
 ```bash
-poetry install
+pip install rls
 ```
 
-Look at the a main.py and models.py for a an example how to use it with FastAPI
+or if you are using poetry
+
+```bash
+poetry add rls
+```
+
+### Source Code
+
+After cloning the repo use it as you would use the package but import from your local cloned files
+
+
+---
+
+## Usage Example
+
+### Creating Policies
 
 ```python
-# models.py
-
 from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import relationship
-from rls.schemas import Permissive, Operation, ExpressionTypes, Command
-from rls.register_rls import register_rls
-from rls.database import Base
+from sqlalchemy.orm import relationship, declarative_base
+from rls.schemas import (
+    Permissive,
+    ExpressionTypes,
+    Command,
+)
 
-# Register RLS policies
-register_rls(Base)
 
+Base = declarative_base()
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+
 
 
 class Item(Base):
@@ -52,190 +61,183 @@ class Item(Base):
 
     __rls_policies__ = [
         Permissive(
-            condition_args=[{
-                "comparator_name": "user_id",
-                "comparator_source": ComparatorSource.bearerTokenPayload,
-                "operation": Operation.equality,
-                "type": ExpressionTypes.integer,
-                "column_name": "owner_id",
-            }],
+            condition_args=[
+                {
+                    "comparator_name": "account_id",
+                    "type": ExpressionTypes.integer,
+                }
+            ],
             cmd=[Command.all],
+            custom_expr="owner_id > {0}",
         )
     ]
 
-```
+class Item1():
+    __tablename__ = "items1"
 
-```python
-from fastapi import FastAPI, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)
+    description = Column(String)
+    owner_id = Column(Integer, ForeignKey("users.id"))
 
+    owner = relationship("User")
 
-from rls.database import get_session
-from test.models import Item
-
-from .engines import async_engine as db_engine
-
-
-app = FastAPI()
-
-Session = Depends(get_session(db_engine))
-
-
-@app.get("/users/items")
-async def get_users(db: AsyncSession = Session):
-    stmt = select(Item)
-    result = await db.execute(stmt)
-    items = result.scalars().all()
-
-    return items
-
-```
-
-#### Custom expression
-
-The user gives us a parametrized expression and array of conidition_args
-
-```python
     __rls_policies__ = [
         Permissive(
             condition_args=[
                 {
-                "comparator_name": "sub",
-                "comparator_source": ComparatorSource.bearerTokenPayload,
-                "operation": Operation.equality,
-                "type": ExpressionTypes.integer,
-                "column_name": "owner_id",
+                    "comparator_name": "sub",
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.integer,
+                    "column_name": "owner_id",
                 },
                 {
-                "comparator_name": "title",
-                "comparator_source": ComparatorSource.bearerTokenPayload,
-                "operation": Operation.equality,
-                "type": ExpressionTypes.text,
-                "column_name": "title",
-                },
-                {
-                "comparator_name": "description",
-                "comparator_source": ComparatorSource.bearerTokenPayload,
-                "operation": Operation.equality,
-                "type": ExpressionTypes.text,
-                "column_name": "description",
-                },
+                    "comparator_name": "title",
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.text,
+                    "column_name": "title",
+                }
             ],
             cmd=[Command.all],
-            expr= "{0} AND ({1} OR {2})",
+            joined_expr="{0} OR {1}",
         )
     ]
+
+
+class Item2():
+    __tablename__ = "items2"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)
+    description = Column(String)
+    owner_id = Column(Integer, ForeignKey("users.id"))
+
+    owner = relationship("User")
+
+    __rls_policies__ = [
+        Permissive(
+            condition_args=[
+                {
+                    "comparator_name": "sub",
+                    "operation": Operation.equality,
+                    "type": ExpressionTypes.integer,
+                    "column_name": "owner_id",
+                }
+            ],
+            cmd=[Command.select],
+        )
+    ]
+
 ```
 
-you can pass multiple expressions and in the `expr` field specify their joining conditions.
-#### `Note`:
-- the valid logical joining operators as of now are `AND` and `OR`
-- if no `expr` is given only the first policy in the array of `condition_args` is taken
 
-#### Run Tests
+### Note
 
-No e2e tests done yet
+`alembic` must be initialized  to be used when creating policies
 
-## API
+Now then, there are multiple way you can add expressions:
 
-These functions provide a structured way to handle database sessions and enforce row-level security (RLS) in your application. If you're working with SQLAlchemy models and need a secure and efficient way to manage database access, here's how you can use them:
+- `plain expressions`: where you just fill the fields in the condition args and don't specify an expr input so it takes the first value in condition args only as `Item2` table policy.
+- `joined expressions`: where you specify multiple condition args elements and input a parametrized joined_expr that has 0 indexed expression numbers e.g: {0} and their joining operations as `Item1` table policy.
+- `custom expressions`: where you write expression as you wish but supply us through custom_expr with the session variables as 0 indexed parameters e.g: {0} as `Item` table policy.
 
-### `register_rls(Base: Type[DeclarativeMeta])`
+the rls policies are registered as metadata info and can be used with alembic
+but first in alembic `env.py` before setting
 
-This function is used to automatically apply Row-Level Security (RLS) policies to your SQLAlchemy models. From the user's perspective:
-
-- **When to Use**: Call this function when setting up your SQLAlchemy models (typically during application initialization).
-- **Purpose**: It ensures that RLS policies are applied after creating tables in the database. This helps enforce fine-grained access control, allowing you to control which rows of data users are allowed to access based on the defined policies.
-- **How it Works**: It listens for table creation events and applies security policies automatically, so you don't have to manually enforce them for each table.
-
-### `get_session(db_engine: Engine)`
-
-This function returns the appropriate session factory based on the type of database engine passed to it. It supports both synchronous and asynchronous engines.
-
-**Parameters**:
-- db_engine:
-  -  The database engine (either synchronous Engine or asynchronous AsyncEngine).
-
-**Behavior**:
-- Engine Binding:
-  - It binds the engine to manage database connections.
-- Session Factory:
-  - Returns get_async_session if the engine is asynchronous.
-  - Returns get_sync_session if the engine is synchronous.
-  - Error Handling: Raises a ValueError if an invalid engine type is provided.
-
-## Examples
-
-using the models.py and main.py found in source code installation
-
-you can send a request with curl for example :
-
-```bash
-curl -H
-"Authorization:Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwibmFtZSI6Ik9tYXIgR2hhaXRoIiwiaWF0IjoxNTE2MjM5MDIyfQ.sk8xw3duwaNnLM7BwrqXmI_k2Kov3hkXLs7Mb9S6M38 "
-localhost:8000/users/items
-```
-Note: this token payload is :
-```json
-{
-  "sub": "1",
-  "name": "Omar Ghaith",
-  "role": "admin",
-  "iat": 1516239022
-}
+```python
+target_metadata = Base.metadata
 ```
 
-it will return only the items owned by owner whose id is 2 as specified in the policy
+call our rls base wrapper instead
 
-```json
-[
-    {
-        "description": "Description for item3",
-        "owner_id": 2,
-        "id": 3,
-        "title": "item3"
-    },
-    {
-        "description": "Description for item4",
-        "owner_id": 2,
-        "id": 4,
-        "title": "item4"
-    }
-]
+```python
+from rls.alembic_rls import rls_base_wrapper
+
+target_metadata = rls_base_wrapper(Base).metadata
 ```
 
-noting that the items table contains
+which returns a base that its rls policies metadata set.
 
-```json
-[
-    {
-        "description": "Description for item1",
-        "owner_id": 1,
-        "id": 1,
-        "title": "item1"
-    },
-    {
-        "description": "Description for item2",
-        "owner_id": 1,
-        "id": 2,
-        "title": "item2"
-    },
-    {
-        "description": "Description for item3",
-        "owner_id": 2,
-        "id": 3,
-        "title": "item3"
-    },
-    {
-        "description": "Description for item4",
-        "owner_id": 2,
-        "id": 4,
-        "title": "item4"
-    }
-]
+Now all you have to do is create a revision and run upgrade head with `alembic` for the policies to be created or dropped.
+
+### Using the policies
+
+now that we have created the policies how are we going to use it?
+
+we have a custom sqlalchemy session class called `RlsSession` which must be used
+or extended.
+
+and you have to pass the context which the session variables values will be taken from which should extend a `pydantic Base Model` and bind an `engine` to it.
+
+```python
+class MyContext(BaseModel):
+    account_id: int
+    provider_id: int
+
+
+context = MyContext(account_id=1, provider_id=2)
+session = RlsSession(context=context, bind=engine)
+
+res = session.execute(text("SELECT * FROM users")).fetchall()
 ```
 
-## License
+you can use this session to talk to your db directly or you can create a session factory
+for which we provide our `RlsSessioner`.
 
-[MIT](LICENSE)
+which takes two arguments:
+
+- `sessionmaker`: your own created session maker from our `RlsSession` or its subclass
+- `context_getter`: an instance of a class that extends `ContextGetter` that has the get context function implemented from which you can extract values from `args` or `kwargs` and assign it to your context variables.
+
+for which you have
+
+```python
+# Mock context model
+class ExampleContext(BaseModel):
+    account_id: int
+    provider_id: int
+
+
+# Concrete implementation of ContextGetter
+class ExampleContextGetter(ContextGetter):
+    def get_context(self, *args, **kwargs) -> ExampleContext:
+        account_id = kwargs.get('acount_id')
+        provider_id = kwargs.get('provider_id')
+
+        return ExampleContext(account_id=account_id, provider_id=provider_id)
+
+
+my_context = ExampleContextGetter()
+
+session_maker = sessionmaker(
+    class_=RlsSession, autoflush=False, autocommit=False, bind=engine
+)
+
+
+with RlsSessioner(sessionmaker=session_maker, context_getter=my_context)() as session:
+    res = session.execute(text("SELECT * FROM users")).fetchall()
+
+```
+
+---
+
+### Frameworks
+
+#### Fastapi
+
+if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler
+
+```python
+
+from rls.rls_sessioner import fastapi_dependency_function
+
+app = FastAPI()
+
+rls_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=my_context)
+my_session = Depends(fastapi_dependency_function(rls_sessioner))
+
+@app.get("/users")
+async def get_users(db: Session = my_session):
+    result = db.execute(text("SELECT * FROM users")).all()
+    return dict(result)
+```

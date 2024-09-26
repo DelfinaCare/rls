@@ -7,25 +7,18 @@ from sqlalchemy import text
 
 
 # Mock context model
-class MockContext(BaseModel):
+class ExampleContext(BaseModel):
     account_id: int
     provider_id: int
 
 
 # Concrete implementation of ContextGetter
-class MockContextGetter(ContextGetter):
-    def get_context(self, *args, **kwargs) -> MockContext:
-        print("Args in context", args)
-        print("Kwargs in context", kwargs)
-
-        # req: Request = kwargs['request'] if 'request' in kwargs else args[0]
-
-        # print('Request:',req)
-        # you can take account_id and provider_id from the request headers
-        return MockContext(account_id=1, provider_id=2)
+class ExampleContextGetter(ContextGetter):
+    def get_context(self, *args, **kwargs) -> ExampleContext:
+        return ExampleContext(account_id=1, provider_id=2)
 
 
-my_context = MockContextGetter()
+my_context = ExampleContextGetter()
 
 session_maker = sessionmaker(
     class_=RlsSession, autoflush=False, autocommit=False, bind=engine
