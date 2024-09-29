@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.2.0 (2024-09-29)
+
+### Feature
+
+* feat: add pypi publish config ([`f45bf07`](https://github.com/DelfinaCare/rls/commit/f45bf075d1ee9fdbc7ef9da845d238da1994c524))
+
 ## v0.1.0 (2024-09-29)
 
 ### Documentation

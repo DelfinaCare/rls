@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rls"
-version = "0.1.0"
+version = "0.2.0"
 description = "fastapi sqlalchemy rls integration package"
 authors = [
   "DelfinaCare <open-source@delfina.com>"
@@ -89,7 +89,7 @@ upload_to_vcs_release = true
 
 [project]
 name = "rls"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
   { name = "DelfinaCare", email = "open-source@delfina.com" }
 ]
