@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.3.0 (2024-09-29)
+
+### Feature
+
+* feat: add publish to pypi step in workflow ([`2f6d69d`](https://github.com/DelfinaCare/rls/commit/2f6d69d51d72fb546e6152d233e15410a109fce4))
+
 ## v0.2.0 (2024-09-29)
 
 ### Feature
