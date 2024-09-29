@@ -39,3 +39,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           push: true
           directory: ./
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
