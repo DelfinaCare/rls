@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "fastapi-rls"
+name = "rls"
 version = "0.0.1"
 description = "fastapi sqlalchemy rls integration package"
 authors = [
@@ -38,8 +38,57 @@ pytest-xdist = "^3.6.1"
 requests = "^2.32.3"
 alembic = "^1.13.3"
 
+
+
+
+[tool.semantic_release]
+branch= "release"
+assets = []
+commit_message = "{version}\n\nNew Release"
+commit_parser = "angular"
+logging_use_named_masks = true
+tag_format = "v{version}"
+commit_version_number = true
+
+version_variable = [
+    "src/tryceratops/__init__.py:__version__"
+]
+version_toml = [
+    "pyproject.toml:tool.poetry.version",
+    "pyproject.toml:project.version"
+]
+version_pattern = [
+    "README.md:rev: v{version}",
+    "docs/CONTRIBUTING.md:rls, version {version}"
+]
+major_on_zero = false
+upload_to_PyPI = true
+upload_to_release = true
+build_command = "pip install poetry && poetry build"
+
+
+[tool.semantic_release.branches.release-action]
+match = "release"
+
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "style", "refactor", "test"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
+[tool.semantic_release.remote]
+name = "origin"
+type = "github"
+ignore_token_for_push = false
+
+# [tool.semantic_release.publish]
+# dist_glob_patterns = ["dist/*"]
+# upload_to_vcs_release = true
+
+
+
 [project]
-name = "fastapi-rls"
+name = "rls"
 version = "0.0.1"
 authors = [
   { name = "DelfinaCare", email = "open-source@delfina.com" }
