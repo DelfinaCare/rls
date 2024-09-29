@@ -1,5 +1,5 @@
 on:
-    pull_request:
+    push:
         branches: [main]
 
 jobs:
@@ -7,6 +7,6 @@ jobs:
         name: Test/Quality
         uses: DelfinaCare/rls/.github/workflows/quality.yml@main
 
-    # release:
-    #     name: Release
-    #     uses: DelfinaCare/rls/.github/workflows/release.yml@main
+    release:
+        name: Release
+        uses: DelfinaCare/rls/.github/workflows/release.yml@main

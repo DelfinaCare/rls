@@ -1,9 +1,7 @@
 name: Semantic Release
 
 on:
-    push:
-        branches:
-            - release
+    workflow_call:
 
 jobs:
   release:
