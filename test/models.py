@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship, declarative_base
 from rls.schemas import (
     Permissive,
-    ExpressionTypes,
     Command,
 )
 
@@ -33,7 +32,7 @@ class Item(Base):
             condition_args=[
                 {
                     "comparator_name": "account_id",
-                    "type": ExpressionTypes.integer,
+                    "type": Integer,
                 }
             ],
             cmd=[Command.all],

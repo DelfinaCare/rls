@@ -2,7 +2,8 @@ from enum import Enum
 from typing import List, Literal, Union, TypedDict, Optional, NotRequired
 
 from pydantic import BaseModel
-from sqlalchemy import text
+from .utils import generate_rls_policy
+from sqlalchemy.sql import sqltypes
 
 import re
 
@@ -31,16 +32,9 @@ class Operation(str, Enum):
     like = "LIKE"
 
 
-class ExpressionTypes(str, Enum):
-    integer = "INTEGER"
-    uuid = "UUID"
-    text = "TEXT"
-    boolean = "BOOLEAN"
-
-
 class ConditionArgs(TypedDict):
     comparator_name: str
-    type: ExpressionTypes
+    type: sqltypes
     operation: NotRequired[Optional[Operation]] = None
     column_name: NotRequired[Optional[str]] = None
 
@@ -56,8 +50,12 @@ class Policy(BaseModel):
     __expr: str = None
     __policy_suffix: int = 0
 
+    class Config:
+        arbitrary_types_allowed = True
+
     def _get_safe_variable_name(self, idx: int = 0):
-        return f"NULLIF(current_setting('rls.{self.condition_args[idx]["comparator_name"]}', true),'')::{self.condition_args[idx]['type'].value}"
+        type_str = self.condition_args[idx]["type"].__visit_name__.upper()
+        return f"NULLIF(current_setting('rls.{self.condition_args[idx]["comparator_name"]}', true),'')::{type_str}"
 
     def _get_expr_from_params(self, table_name: str, idx: int = 0):
         safe_variable_name = self._get_safe_variable_name(idx=idx)
@@ -146,10 +144,6 @@ class Policy(BaseModel):
 
         policy_lists = []
 
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
-        print(self.__expr)
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
-
         for cmd in commands:
             cmd_value = cmd.value if isinstance(cmd, Command) else cmd
             policy_name = (
@@ -158,30 +152,14 @@ class Policy(BaseModel):
             )
             self.__policy_names.append(policy_name)
 
-            if cmd_value in ["ALL", "SELECT", "UPDATE", "DELETE"]:
-                policy_lists.append(
-                    text(
-                        f"""
-                        CREATE POLICY {policy_name} ON {table_name}
-                        AS {self.definition}
-                        FOR {cmd_value}
-                        USING ({self.__expr})
-                        """
-                    )
-                )
-            elif cmd in ["INSERT"]:
-                policy_lists.append(
-                    text(
-                        f"""
-                        CREATE POLICY {policy_name} ON {table_name}
-                        AS {self.definition}
-                        FOR {cmd_value}
-                        WITH CHECK ({self.__expr})
-                        """
-                    )
-                )
-            else:
-                raise ValueError(f'Unknown policy command"{cmd_value}"')
+            generated_policy = generate_rls_policy(
+                cmd=cmd_value,
+                definition=self.definition,
+                policy_name=policy_name,
+                table_name=table_name,
+                expr=self.__expr,
+            )
+            policy_lists.append(generated_policy)
         return policy_lists
 
 

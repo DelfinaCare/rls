@@ -4,6 +4,7 @@ from alembic.autogenerate import comparators, renderers
 from alembic.operations import MigrateOperation, Operations
 from sqlalchemy import text
 from sqlalchemy.ext.declarative import DeclarativeMeta
+from .utils import generate_rls_policy
 
 
 ############################
@@ -272,30 +273,15 @@ def create_policy(operations, operation):
     cmd = operation.cmd
     expr = operation.expr
 
-    sql = ""
     # Generate the SQL to create the policy
-    if cmd in ["ALL", "SELECT", "UPDATE", "DELETE"]:
-        sql = text(
-            f"""
-                CREATE POLICY {policy_name} ON {table_name}
-                AS {definition}
-                FOR {cmd}
-                USING ({expr})
-                """
-        )
 
-    elif cmd in ["INSERT"]:
-        sql = text(
-            f"""
-                CREATE POLICY {policy_name} ON {table_name}
-                AS {definition}
-                FOR {cmd}
-                WITH CHECK ({expr})
-                """
-        )
-
-    else:
-        raise ValueError(f'Unknown policy command"{cmd}"')
+    sql = generate_rls_policy(
+        cmd=cmd,
+        definition=definition,
+        policy_name=policy_name,
+        table_name=table_name,
+        expr=expr,
+    )
 
     operations.execute(sql)
 

@@ -14,6 +14,13 @@ context = MyContext(account_id=1, provider_id=2)
 session = RlsSession(context=context, bind=engine)
 
 
-res = session.execute(text("SELECT * FROM users")).fetchall()
+res = session.execute(text("SELECT * FROM items")).fetchall()
+print("res:", res)
 
-print(res)
+
+with session.bypass_rls() as session:
+    res2 = session.execute(text("SELECT * FROM items")).fetchall()
+    print("res2:", res2)
+
+
+# TODO: in init must create a bypass_rls_role that is super or has bypass rls privilege amongst with most others
