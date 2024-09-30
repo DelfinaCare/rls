@@ -82,12 +82,12 @@ def disable_rls(operations, operation):
 
 @renderers.dispatch_for(EnableRlsOp)
 def render_enable_rls(autogen_context, op):
-    return "op.enable_rls(%r)" % (op.tablename)
+    return "op.enable_rls(%r)  # type: ignore" % (op.tablename)
 
 
 @renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
-    return "op.disable_rls(%r)" % (op.tablename)
+    return "op.disable_rls(%r)  # type: ignore" % (op.tablename)
 
 
 ############################
@@ -294,12 +294,12 @@ def drop_policy(operations, operation):
 
 @renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
-    return f"op.create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return f"op.create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
 @renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
-    return f"op.drop_policy(tablename={op.table_name!r}, policyname={op.policy_name!r})"
+    return f"op.drop_policy(tablename={op.table_name!r}, policyname={op.policy_name!r}) # type: ignore"
 
 
 def set_metadata_info(Base: Type[DeclarativeMeta]):

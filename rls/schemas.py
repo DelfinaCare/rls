@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Literal, Union, TypedDict, Optional, NotRequired
+from typing import List, Literal, Union, TypedDict, Optional, NotRequired, Type
 
 from pydantic import BaseModel
 from .utils import generate_rls_policy
@@ -34,9 +34,9 @@ class Operation(str, Enum):
 
 class ConditionArgs(TypedDict):
     comparator_name: str
-    type: sqltypes
-    operation: NotRequired[Optional[Operation]] = None
-    column_name: NotRequired[Optional[str]] = None
+    type: Type[sqltypes.TypeEngine]
+    operation: NotRequired[Optional[Operation]]
+    column_name: NotRequired[Optional[str]]
 
 
 class Policy(BaseModel):
@@ -47,8 +47,8 @@ class Policy(BaseModel):
     custom_expr: Optional[str] = None
 
     __policy_names: List[str] = []
-    __expr: str = None
-    __policy_suffix: int = 0
+    __expr: str = ""
+    __policy_suffix: str = ""
 
     class Config:
         arbitrary_types_allowed = True
@@ -60,7 +60,15 @@ class Policy(BaseModel):
     def _get_expr_from_params(self, table_name: str, idx: int = 0):
         safe_variable_name = self._get_safe_variable_name(idx=idx)
 
-        expr = f"{self.condition_args[idx]['column_name']} {self.condition_args[idx]['operation'].value} {safe_variable_name}"
+        operation_obj = self.condition_args[idx]
+
+        # Check if "operation" exists and is not None before accessing its value
+        if "operation" in operation_obj and operation_obj["operation"] is not None:
+            operation_value = operation_obj["operation"].value
+        else:
+            operation_value = ""
+
+        expr = f"{self.condition_args[idx]['column_name']} {operation_value} {safe_variable_name}"
 
         return expr
 
@@ -69,7 +77,7 @@ class Policy(BaseModel):
         for idx in range(len(self.condition_args)):
             pattern = rf"\{{{idx}\}}"  # Escaped curly braces
             parsed_expr = self._get_expr_from_params(table_name, idx)
-            expr = re.sub(pattern, parsed_expr, expr)
+            expr = re.sub(pattern, parsed_expr, str(expr))
         return expr
 
     def _get_expr_from_custom_expr(self, table_name: str):
@@ -77,7 +85,7 @@ class Policy(BaseModel):
         for idx in range(len(self.condition_args)):
             safe_variable_name = self._get_safe_variable_name(idx=idx)
             pattern = rf"\{{{idx}\}}"
-            expr = re.sub(pattern, safe_variable_name, expr)
+            expr = re.sub(pattern, safe_variable_name, str(expr))
         return expr
 
     def _validate_joining_operations_in_expr(self):
@@ -120,7 +128,7 @@ class Policy(BaseModel):
                     )
 
     @property
-    def policy_names(self) -> str:
+    def policy_names(self) -> list[str]:
         """Getter for the private __policy_name field."""
         return self.__policy_names
 
