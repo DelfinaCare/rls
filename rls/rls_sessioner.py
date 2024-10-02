@@ -26,8 +26,6 @@ class RlsSessioner:
     def __call__(
         self, *args: Optional[Any], **kwargs: Optional[Any]
     ):  # Get context from the context getter
-        print("Kwargs:", kwargs)
-        print("Args:", args)
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:

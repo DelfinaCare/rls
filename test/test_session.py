@@ -21,6 +21,3 @@ print("res:", res)
 with session.bypass_rls() as session:
     res2 = session.execute(text("SELECT * FROM items")).fetchall()
     print("res2:", res2)
-
-
-# TODO: in init must create a bypass_rls_role that is super or has bypass rls privilege amongst with most others

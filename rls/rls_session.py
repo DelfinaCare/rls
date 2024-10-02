@@ -18,9 +18,6 @@ class RlsSession(Session):
         """
         return self.BypassRLSContext(self)
 
-    def setContext(self, context: BaseModel):
-        self.context = context
-
     def _get_set_statements(self):
         """
         Generates SQL SET statements based on the context model.
@@ -39,11 +36,8 @@ class RlsSession(Session):
         Executes the RLS SET statements unless bypassing RLS.
         """
         if self._rls_bypass:  # Skip setting RLS when bypassing
-            print("Bypassing RLS")
             return
-        print("Setting RLS")
         stmts = self._get_set_statements()
-        print("stmts:", stmts)
         if stmts is not None:
             for stmt in stmts:
                 super().execute(stmt)
@@ -76,8 +70,7 @@ class RlsSession(Session):
             try:
                 # Disable row-level security
                 self.session.execute(text("SET LOCAL rls.bypass_rls = true;"))
-            except Exception as e:
-                print(f"Failed to disable row-level security: {e}")
+            except Exception:
                 self.session._rls_bypass = False  # Disable bypass flag to avoid issues
 
                 # Rollback transaction to avoid failed state
@@ -93,16 +86,12 @@ class RlsSession(Session):
 
             # If the transaction failed, skip re-enabling RLS
             if exc_type is not None:
-                print(f"Skipping re-enabling RLS due to prior error: {exc_val}")
                 self.session.rollback()
                 return
-
             try:
                 # Re-enable row-level security
                 self.session.execute(text("SET LOCAL rls.bypass_rls = false;"))
-            except Exception as e:
-                print(f"Failed to re-enable row-level security: {e}")
-
+            except Exception:
                 # Optionally rollback if there's a failure
                 self.session.rollback()
 
