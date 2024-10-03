@@ -67,15 +67,8 @@ class RlsSession(Session):
             If the command fails, rollback the transaction.
             """
             self.session._rls_bypass = True
-            try:
-                # Disable row-level security
-                self.session.execute(text("SET LOCAL rls.bypass_rls = true;"))
-            except Exception:
-                self.session._rls_bypass = False  # Disable bypass flag to avoid issues
-
-                # Rollback transaction to avoid failed state
-                self.session.rollback()
-                raise  # Re-raise the exception to stop further execution
+            # Disable row-level security
+            self.session.execute(text("SET LOCAL rls.bypass_rls = true;"))
             return self.session
 
         def __exit__(self, exc_type, exc_val, exc_tb):
@@ -88,12 +81,7 @@ class RlsSession(Session):
             if exc_type is not None:
                 self.session.rollback()
                 return
-            try:
-                # Re-enable row-level security
-                self.session.execute(text("SET LOCAL rls.bypass_rls = false;"))
-            except Exception:
-                # Optionally rollback if there's a failure
-                self.session.rollback()
+            self.session.execute(text("SET LOCAL rls.bypass_rls = false;"))
 
         def execute(self, *args, **kwargs):
             return self.session.execute(*args, **kwargs)
