@@ -7,6 +7,10 @@ authors = [
 ]
 license = "MIT"
 readme = "README.md"
+packages = [
+  {include = "rls"},
+  {include = "rls/py.typed"},
+]
 
 [tool.poetry.dependencies]
 python = ">=3.11"
