@@ -1,7 +1,7 @@
 name: Code Quality Test
 
 on:
-  workflow_call:
+  pull_request:
 
 jobs:
   lint:
