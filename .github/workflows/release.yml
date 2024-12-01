@@ -32,7 +32,7 @@ jobs:
           poetry install
 
       - name: Python Semantic Release
-        uses: python-semantic-release/python-semantic-release@v9.9.0
+        uses: python-semantic-release/python-semantic-release@v9.14.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           push: true
