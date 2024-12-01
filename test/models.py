@@ -1,9 +1,9 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, func
+from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import column
 from typing import Any
-from rls.schemas import Permissive, Command
+from rls.schemas import Permissive, Command, ConditionArg
 
 # To avoid deletion by pre-commit hooks
 _Any = Any
@@ -31,13 +31,9 @@ class Item(Base):
     __rls_policies__ = [
         Permissive(
             condition_args=[
-                {
-                    "comparator_name": "account_id",
-                    "type": Integer,
-                }
+                ConditionArg(comparator_name="account_id", type=Integer),
             ],
             cmd=[Command.all],
-            custom_expr=column("owner_id")
-            > func.current_setting("account_id").cast(Integer),
+            custom_expr=lambda x: column("owner_id") == x,
         )
     ]
