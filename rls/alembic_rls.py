@@ -175,10 +175,6 @@ def compare_table_level(
         policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
         policy_expr = policy_meta.expression
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
-            print("****************************************")
-            print("rls_policies_db: ", rls_policies_db)
-            print("****************************************")
-
             matched_policy = next(
                 (p for p in rls_policies_db if p["policyname"] == single_policy_name),
                 None,

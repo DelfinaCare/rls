@@ -26,7 +26,6 @@ if config.config_file_name is not None:
 # TODO: change meta_data_info name to rls_base_wrapper(base: declarative_base)
 target_metadata = set_metadata_info(Base).metadata
 
-print("target_metadata", target_metadata.info)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
