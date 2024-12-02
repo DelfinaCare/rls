@@ -105,7 +105,11 @@ def check_rls_policies(conn, schemaname, tablename):
                 AND tablename = '{tablename}';"""
         )
     ).fetchall()
-    return result
+    # Convert to a list of dictionaries
+    columns = ["policyname", "permissive", "roles", "qual", "with_check"]
+    result_dicts = [dict(zip(columns, row)) for row in result]
+
+    return result_dicts
 
 
 def check_table_exists(conn, schemaname, tablename) -> bool:

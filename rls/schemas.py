@@ -1,11 +1,13 @@
 from enum import Enum
-from typing import List, Literal, Union, TypedDict, Optional, NotRequired, Type
-
+from typing import List, Literal, Union, Type, Callable
+import inspect
 from pydantic import BaseModel
 from .utils import generate_rls_policy
-from sqlalchemy.sql import sqltypes
-
-import re
+from sqlalchemy.sql.elements import (
+    ClauseElement,
+)
+from sqlalchemy import Boolean
+from sqlalchemy.sql import func, sqltypes
 
 
 class Command(str, Enum):
@@ -17,115 +19,75 @@ class Command(str, Enum):
     delete = "DELETE"
 
 
-class LogicalOperator(str, Enum):
-    AND = "AND"
-    OR = "OR"
-
-
-class Operation(str, Enum):
-    equality = "="
-    inequality = "<>"
-    greater_than = ">"
-    greater_than_or_equal = ">="
-    less_than = "<"
-    less_than_or_equal = "<="
-    like = "LIKE"
-
-
-class ConditionArgs(TypedDict):
+class ConditionArg(BaseModel):
     comparator_name: str
     type: Type[sqltypes.TypeEngine]
-    operation: NotRequired[Optional[Operation]]
-    column_name: NotRequired[Optional[str]]
 
 
 class Policy(BaseModel):
     definition: str
-    condition_args: List[ConditionArgs]
+    condition_args: List[ConditionArg]
     cmd: Union[Command, List[Command]]
-    joined_expr: Optional[str] = None
-    custom_expr: Optional[str] = None
+    custom_expr: Callable[..., ClauseElement]
 
     __policy_names: List[str] = []
     __expr: str = ""
     __policy_suffix: str = ""
+    __condition_args_prefix: str = "rls"
 
     class Config:
         arbitrary_types_allowed = True
 
-    def _get_safe_variable_name(self, idx: int = 0):
-        type_str = self.condition_args[idx]["type"].__visit_name__.upper()
-        return f"NULLIF(current_setting('rls.{self.condition_args[idx]["comparator_name"]}', true),'')::{type_str}"
+    def _ensure_boolean(self):
+        """
+        Ensures that the given expression evaluates to a Boolean value.
+        If not, it casts the expression to Boolean.
+        """
+        # Check if the expression is already of Boolean type
+        if isinstance(self.__expr.type, Boolean):
+            return True
 
-    def _get_expr_from_params(self, table_name: str, idx: int = 0):
-        safe_variable_name = self._get_safe_variable_name(idx=idx)
+        # Otherwise, cast the expression to Boolean explicitly or raise an error
+        raise ValueError("Expression does not evaluate to a Boolean value")
+        # return expression.cast(Boolean)
 
-        operation_obj = self.condition_args[idx]
+    def _validate_Arguments_length(self):
+        condition_args_length = len(self.condition_args)
+        lamda_args_length = len(inspect.signature(self.custom_expr).parameters)
+        if condition_args_length != lamda_args_length:
+            raise ValueError(
+                f"Length mismatch for arguments. Expected {condition_args_length}, got {lamda_args_length}"
+            )
+        return True
 
-        # Check if "operation" exists and is not None before accessing its value
-        if "operation" in operation_obj and operation_obj["operation"] is not None:
-            operation_value = operation_obj["operation"].value
-        else:
-            operation_value = ""
-
-        expr = f"{self.condition_args[idx]['column_name']} {operation_value} {safe_variable_name}"
-
-        return expr
-
-    def _get_expr_from_joined_expr(self, table_name: str):
-        expr = self.joined_expr
-        for idx in range(len(self.condition_args)):
-            pattern = rf"\{{{idx}\}}"  # Escaped curly braces
-            parsed_expr = self._get_expr_from_params(table_name, idx)
-            expr = re.sub(pattern, parsed_expr, str(expr))
-        return expr
+    def _convert_lambda_to_clause_element(self):
+        """Convert the lambda function to a SQLAlchemy expression."""
+        args = []
+        for arg in self.condition_args:
+            coalesced_value = func.coalesce(
+                func.current_setting(
+                    f"{self.__condition_args_prefix}.{arg.comparator_name}"
+                ),
+                "",
+            ).cast(arg.type)
+            args.append(coalesced_value)
+        compiled_expression = self.custom_expr(*args)
+        self.__expr = str(
+            compiled_expression.compile(compile_kwargs={"literal_binds": True})
+        )
 
     def _get_expr_from_custom_expr(self, table_name: str):
-        expr = self.custom_expr
-        for idx in range(len(self.condition_args)):
-            safe_variable_name = self._get_safe_variable_name(idx=idx)
-            pattern = rf"\{{{idx}\}}"
-            expr = re.sub(pattern, safe_variable_name, str(expr))
-        return expr
+        """Get the SQL expression from the custom expression with RLS prefixing."""
+        if isinstance(self.custom_expr, ClauseElement):
+            self._validate_Arguments_length()
 
-    def _validate_joining_operations_in_expr(self):
-        # Pattern to match a number in curly braces followed by "AND" or "OR"
-        whole_pattern = r"\{(\d+)\}\s*(AND|OR)"
+            self._convert_lambda_to_clause_element()
 
-        # Find all matches of the pattern in the expression
-        matches = re.findall(whole_pattern, self.expr)
+            self._ensure_boolean()
 
-        # Extract the second group (AND/OR) from each match
-        operators = [match[1] for match in matches]
-
-        for operator in operators:
-            if operator not in LogicalOperator.__members__.values():
-                raise ValueError(f"Invalid logical operator: {operator}")
-
-    def _validate_state(self):
-        for condition_arg in self.condition_args:
-            if self.joined_expr is not None and (
-                "column_name" not in condition_arg or "operation" not in condition_arg
-            ):
-                raise ValueError(
-                    "condition_args must be provided if joined_expr is provided"
-                )
-
-            if self.custom_expr is not None:
-                if "column_name" in condition_arg or "operation" in condition_arg:
-                    raise ValueError(
-                        "column name and operation must not be provided if custom_expr is provided"
-                    )
-
-                if (
-                    "comparator_name" not in condition_arg
-                    and "comparator_source" not in condition_arg
-                    and "type" not in condition_arg
-                    and re.search(r"\{(\d+)\}", self.custom_expr)
-                ):
-                    raise ValueError(
-                        "comparator_name, comparator_source and type must be provided if custom_expr is provided with parameters"
-                    )
+        raise ValueError(
+            f"`custom_expr` must be defined for table `{table_name}`. If you're constructing expressions dynamically, "
+        )
 
     @property
     def policy_names(self) -> list[str]:
@@ -141,14 +103,7 @@ class Policy(BaseModel):
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
         self.__policy_suffix = name_suffix
 
-        self._validate_state()
-
-        if self.custom_expr is not None:
-            self.__expr = self._get_expr_from_custom_expr(table_name)
-        elif self.joined_expr is not None:
-            self.__expr = self._get_expr_from_joined_expr(table_name)
-        else:
-            self.__expr = self._get_expr_from_params(table_name)
+        self._get_expr_from_custom_expr(table_name=table_name)
 
         policy_lists = []
 
