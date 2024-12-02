@@ -38,14 +38,14 @@ class Policy(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def _ensure_boolean(self, expression: ClauseElement):
+    def _ensure_boolean(self):
         """
         Ensures that the given expression evaluates to a Boolean value.
         If not, it casts the expression to Boolean.
         """
         # Check if the expression is already of Boolean type
-        if isinstance(expression.type, Boolean):
-            return expression
+        if isinstance(self.__expr.type, Boolean):
+            return True
 
         # Otherwise, cast the expression to Boolean explicitly or raise an error
         raise ValueError("Expression does not evaluate to a Boolean value")
@@ -71,27 +71,19 @@ class Policy(BaseModel):
                 "",
             ).cast(arg.type)
             args.append(coalesced_value)
-        self.custom_expr = self.custom_expr(*args)
+        compiled_expression = self.custom_expr(*args)
+        self.__expr = str(
+            compiled_expression.compile(compile_kwargs={"literal_binds": True})
+        )
 
     def _get_expr_from_custom_expr(self, table_name: str):
         """Get the SQL expression from the custom expression with RLS prefixing."""
         if isinstance(self.custom_expr, ClauseElement):
-            validation_status = self._validate_Arguments_length()
-            print("Validation status:", validation_status)
+            self._validate_Arguments_length()
 
             self._convert_lambda_to_clause_element()
 
-            ensured_boolean_expr = self._ensure_boolean(expression=self.custom_expr)
-            print(
-                "Ensured expression:",
-                str(
-                    ensured_boolean_expr.compile(compile_kwargs={"literal_binds": True})
-                ),
-            )
-
-            self.__expr = str(
-                self.custom_expr.compile(compile_kwargs={"literal_binds": True})
-            )
+            self._ensure_boolean()
 
         raise ValueError(
             f"`custom_expr` must be defined for table `{table_name}`. If you're constructing expressions dynamically, "
