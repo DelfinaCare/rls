@@ -21,6 +21,8 @@ python = ">=3.11"
 pydantic = ">=2.9.1"
 sqlalchemy = ">=2.0.34"
 alembic = ">=1.13.3"
+testing-postgresql = "^1.3.0"
+unittest2 = "^1.1.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = ">=1.11.2"
