@@ -4,7 +4,8 @@ from alembic.autogenerate import comparators, renderers
 from alembic.operations import MigrateOperation, Operations
 from sqlalchemy import text
 from sqlalchemy.ext.declarative import DeclarativeMeta
-from .utils import generate_rls_policy
+from .utils import generate_rls_policy, policy_changed_checker
+from .schemas import Policy, Command
 
 
 ############################
@@ -95,21 +96,38 @@ def render_disable_rls(autogen_context, op):
 ############################
 
 
-def check_rls_policies(conn, schemaname, tablename):
+def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
+    columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     result = conn.execute(
         text(
-            f"""SELECT policyname, permissive, roles, qual, with_check
+            f"""SELECT {', '.join(columns)}
                 FROM pg_policies
                 WHERE schemaname = '{schemaname if schemaname else "public"}'
                 AND tablename = '{tablename}';"""
         )
     ).fetchall()
     # Convert to a list of dictionaries
-    columns = ["policyname", "permissive", "roles", "qual", "with_check"]
-    result_dicts = [dict(zip(columns, row)) for row in result]
+    # result_dicts = [dict(zip(columns, row)) for row in result]
 
-    return result_dicts
+    # Convert query result to a list of Policy objects
+    policies = []
+    for row in result:
+        policy_data = dict(zip(columns, row))
+
+        # Map the database fields to Policy attributes
+        policy = Policy(
+            definition=policy_data.get("permissive"),
+            cmd=policy_data.get("cmd"),
+            custom_policy_name=policy_data.get("policyname"),
+        )
+
+        # Set the expression (or any other additional fields) as needed
+        policy.expression = policy_data.get("with_check") or policy_data.get("qual")
+
+        policies.append(policy)
+
+    return policies
 
 
 def check_table_exists(conn, schemaname, tablename) -> bool:
@@ -175,16 +193,27 @@ def compare_table_level(
         policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
         policy_expr = policy_meta.expression
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
+            current_cmd = ""
+            if isinstance(policy_meta.cmd, list):
+                if isinstance(policy_meta.cmd[ix], Command):
+                    current_cmd = policy_meta.cmd[ix].value
+                else:
+                    current_cmd = policy_meta.cmd[ix]
+            else:
+                if isinstance(policy_meta.cmd, Command):
+                    current_cmd = policy_meta.cmd.value
+                else:
+                    current_cmd = policy_meta.cmd
+
             matched_policy = next(
-                (p for p in rls_policies_db if p["policyname"] == single_policy_name),
+                (
+                    p
+                    for p in rls_policies_db
+                    if p.custom_policy_name == single_policy_name
+                ),
                 None,
             )
             if not matched_policy:
-                current_cmd = (
-                    policy_meta.cmd[0].value
-                    if isinstance(policy_meta.cmd, list)
-                    else policy_meta.cmd.value
-                )
                 # Policy exists in metadata but not in the database, so create it
                 modify_ops.ops.append(
                     CreatePolicyOp(
@@ -196,22 +225,57 @@ def compare_table_level(
                     )
                 )
 
-        for policy_db in rls_policies_db:
-            matched_policy = next(
-                (p for p in policy_meta.policy_names if p == policy_db["policyname"]),
-                None,
-            )
-            if not matched_policy:
-                # Policy exists in the database but not in metadata, so drop it
-                modify_ops.ops.append(
-                    DropPolicyOp(
-                        table_name=tablename,
-                        definition=policy_db["permissive"],
-                        policy_name=policy_db["policyname"],
-                        cmd=policy_db["cmd"],
-                        expr=policy_db["qual"],
+            else:
+                # Policy exists in both metadata and database, so check if it needs to be updated
+                # Notice: Matched policy is db policy
+                tmp_policy_meta = policy_meta.model_copy()
+                tmp_policy_meta.cmd = Command(current_cmd)
+                if not policy_changed_checker(
+                    db_policy=matched_policy, metadata_policy=tmp_policy_meta
+                ):
+                    # Policy has changed, so drop and recreate it
+                    modify_ops.ops.append(
+                        DropPolicyOp(
+                            table_name=tablename,
+                            definition=matched_policy.definition,
+                            policy_name=matched_policy.custom_policy_name,
+                            cmd=current_cmd,
+                            expr=matched_policy.expression,
+                        )
                     )
+                    modify_ops.ops.append(
+                        CreatePolicyOp(
+                            table_name=tablename,
+                            definition=policy_meta.definition,
+                            policy_name=single_policy_name,
+                            cmd=current_cmd,
+                            expr=policy_expr,
+                        )
+                    )
+
+    # Step 5.5 : Get all policy meta names
+    all_metadata_policy_names = []
+    for policy_meta in rls_policies_meta:
+        policy_meta.get_sql_policies(table_name=tablename)
+        all_metadata_policy_names.extend(policy_meta.policy_names)
+
+    # Step 6. Check if there are any policies in the database that are not in the metadata
+    for policy_db in rls_policies_db:
+        matched_policy = next(
+            (p for p in all_metadata_policy_names if p == policy_db.custom_policy_name),
+            None,
+        )
+        if not matched_policy:
+            # Policy exists in the database but not in metadata, so drop it
+            modify_ops.ops.append(
+                DropPolicyOp(
+                    table_name=tablename,
+                    definition=policy_db.definition,
+                    policy_name=policy_db.custom_policy_name,
+                    cmd=policy_db.cmd.value,
+                    expr=policy_db.expression,
                 )
+            )
 
 
 @Operations.register_operation("create_policy")
@@ -254,8 +318,17 @@ class DropPolicyOp(MigrateOperation):
         self.policy_name = policy_name
 
     @classmethod
-    def drop_policy(cls, operations, table_name, policy_name, **kw):
-        op = DropPolicyOp(table_name=table_name, policy_name=policy_name, **kw)
+    def drop_policy(
+        cls, operations, table_name, policy_name, definition, cmd, expr, **kw
+    ):
+        op = DropPolicyOp(
+            table_name=table_name,
+            policy_name=policy_name,
+            definition=definition,
+            cmd=cmd,
+            expr=expr,
+            **kw,
+        )
         return operations.invoke(op)
 
     def reverse(self):
@@ -303,7 +376,7 @@ def render_create_policy(autogen_context, op):
 
 @renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
-    return f"op.drop_policy(tablename={op.table_name!r}, policyname={op.policy_name!r}) # type: ignore"
+    return f"op.drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
 def set_metadata_info(Base: Type[DeclarativeMeta]):
