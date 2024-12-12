@@ -5,7 +5,7 @@ from typing import Optional
 
 
 class RlsSession(Session):
-    def __init__(self, context: Optional[BaseModel], *args, **kwargs):
+    def __init__(self, context: Optional[BaseModel] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass = False  # Track RLS bypass state
         if context is not None:
