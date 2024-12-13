@@ -95,13 +95,9 @@ def compare_between_policy_sql_expressions(
     Returns:
         bool: True if the expressions are equivalent, False otherwise.
     """
-    try:
-        # Normalize both expressions
-        normalized_expr1 = normalize_sql_policy_expression(first_expression)
-        normalized_expr2 = normalize_sql_policy_expression(second_expression)
+    # Normalize both expressions
+    normalized_expr1 = normalize_sql_policy_expression(first_expression)
+    normalized_expr2 = normalize_sql_policy_expression(second_expression)
 
-        # Compare the normalized expressions
-        return normalized_expr1 == normalized_expr2
-    except ValueError as e:
-        print(f"Error comparing expressions: {e}")
-        return False
+    # Compare the normalized expressions
+    return normalized_expr1 == normalized_expr2
