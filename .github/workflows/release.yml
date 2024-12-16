@@ -2,8 +2,8 @@ name: Semantic Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -30,14 +30,22 @@ jobs:
 
       - name: Install dependencies
         run: |
-          poetry install
+          poetry install --no-root
 
-      - name: Python Semantic Release
-        uses: python-semantic-release/python-semantic-release@v9.9.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          push: true
-          directory: ./
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Build package with Poetry
+        run: poetry build
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          gh release create "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
+              --generate-notes
+
+      # - name: Publish to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
