@@ -31,15 +31,17 @@ After cloning the repo use it as you would use the package but import from your 
 
 ```python
 from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import relationship, declarative_base
-from rls.schemas import (
-    Permissive,
-    ExpressionTypes,
-    Command,
-)
+from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql import column
+from typing import Any
+from rls.schemas import Permissive, Command, ConditionArg
 
+# To avoid deletion by pre-commit hooks
+_Any = Any
 
-Base = declarative_base()
+Base = declarative_base()  # type: Any
+
 
 class User(Base):
     __tablename__ = "users"
@@ -47,6 +49,16 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
 
+    __rls_policies__ = [
+        Permissive(
+            condition_args=[
+                ConditionArg(comparator_name="account_id", type=Integer),
+            ],
+            cmd=[Command.select, Command.update],
+            custom_expr=lambda x: column("id") == x,
+            custom_policy_name="equal_to_accountId_policy",
+        ),
+    ]
 
 
 class Item(Base):
@@ -55,91 +67,77 @@ class Item(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     description = Column(String)
-    owner_id = Column(Integer, ForeignKey("users.id"))
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
 
     owner = relationship("User")
 
     __rls_policies__ = [
         Permissive(
             condition_args=[
-                {
-                    "comparator_name": "account_id",
-                    "type": ExpressionTypes.integer,
-                }
+                ConditionArg(comparator_name="account_id", type=Integer),
             ],
-            cmd=[Command.all],
-            custom_expr="owner_id > {0}",
-        )
-    ]
-
-class Item1():
-    __tablename__ = "items1"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(String)
-    owner_id = Column(Integer, ForeignKey("users.id"))
-
-    owner = relationship("User")
-
-    __rls_policies__ = [
+            cmd=[Command.select, Command.update],
+            custom_expr=lambda x: column("owner_id") == x,
+            custom_policy_name="equal_to_accountId_policy",
+        ),
         Permissive(
             condition_args=[
-                {
-                    "comparator_name": "sub",
-                    "operation": Operation.equality,
-                    "type": ExpressionTypes.integer,
-                    "column_name": "owner_id",
-                },
-                {
-                    "comparator_name": "title",
-                    "operation": Operation.equality,
-                    "type": ExpressionTypes.text,
-                    "column_name": "title",
-                }
-            ],
-            cmd=[Command.all],
-            joined_expr="{0} OR {1}",
-        )
-    ]
-
-
-class Item2():
-    __tablename__ = "items2"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(String)
-    owner_id = Column(Integer, ForeignKey("users.id"))
-
-    owner = relationship("User")
-
-    __rls_policies__ = [
-        Permissive(
-            condition_args=[
-                {
-                    "comparator_name": "sub",
-                    "operation": Operation.equality,
-                    "type": ExpressionTypes.integer,
-                    "column_name": "owner_id",
-                }
+                ConditionArg(comparator_name="account_id", type=Integer),
             ],
             cmd=[Command.select],
-        )
+            custom_expr=lambda x: column("owner_id") > x,
+            custom_policy_name="greater_than_accountId_policy",
+        ),
+        Permissive(
+            condition_args=[
+                ConditionArg(comparator_name="account_id", type=Integer),
+            ],
+            cmd=[Command.all],
+            custom_expr=lambda x: column("owner_id") <= x,
+            custom_policy_name="smaller_than_or_equal_accountId_policy",
+        ),
     ]
-
 ```
 
+#### Condition Args
 
-### Note
+`ConditionArg` is a class that takes two arguments:
+- `comparator_name`: the name of the variable that will be passed in the context
+- `type`: the sqlalchemy `sqltype` of the variable that will be passed in the context
 
+```python
+from sqlalchemy import Integer
+
+ConditionArg(comparator_name="account_id", type=Integer)
+```
+
+#### Commands
+
+`Command` is an enum for possible sql commands, it has the following values:
+- `select` : for select queries
+- `insert` : for insert queries
+- `update` : for update queries
+- `delete` : for delete queries
+- `all` : for all queries
+
+
+
+#### Expressions
+You can utilize lambda functions to create policies dynamically
+
+```python
+from sqlalchemy import column
+
+# ConditionArg(comparator_name="account_id", type=Integer),
+
+lambda x: x > column("owner_id")
+```
+this would take the column owner_id from the table and compare it with the first value passed in the context
+in this case would be the `account_id`
+
+#### Alembic
 `alembic` must be initialized  to be used when creating policies
 
-Now then, there are multiple way you can add expressions:
-
-- `plain expressions`: where you just fill the fields in the condition args and don't specify an expr input so it takes the first value in condition args only as `Item2` table policy.
-- `joined expressions`: where you specify multiple condition args elements and input a parametrized joined_expr that has 0 indexed expression numbers e.g: {0} and their joining operations as `Item1` table policy.
-- `custom expressions`: where you write expression as you wish but supply us through custom_expr with the session variables as 0 indexed parameters e.g: {0} as `Item` table policy.
 
 the rls policies are registered as metadata info and can be used with alembic
 but first in alembic `env.py` before setting
@@ -160,12 +158,15 @@ which returns a base that its rls policies metadata set.
 
 Now all you have to do is create a revision and run upgrade head with `alembic` for the policies to be created or dropped.
 
+for more info on handling alembic and it's custom operations check our [alembic docs](./alembic.md)
+
+---
+
 ### Using the policies
 
 now that we have created the policies how are we going to use it?
 
-we have a custom sqlalchemy session class called `RlsSession` which must be used
-or extended.
+we have a custom sqlalchemy session class called `RlsSession` that extends sqlaclhemy's `Session` which must be used or extended.
 
 and you have to pass the context which the session variables values will be taken from which should extend a `pydantic Base Model` and bind an `engine` to it.
 
@@ -179,7 +180,14 @@ context = MyContext(account_id=1, provider_id=2)
 session = RlsSession(context=context, bind=engine)
 
 res = session.execute(text("SELECT * FROM users")).fetchall()
+
+# Bypassing the rls policies with a context manager
+
+with session.bypass_rls() as session:
+    res2 = session.execute(text("SELECT * FROM items")).fetchall()
 ```
+
+
 
 you can use this session to talk to your db directly or you can create a session factory
 for which we provide our `RlsSessioner`.
@@ -243,8 +251,10 @@ if you are trying to use the `RlsSessioner` with fastapi you may face some diffi
 
 ```python
 
-from rls.rls_sessioner import fastapi_dependency_function
+from rls.rls_sessioner import fastapi_dependency_function, ContextGetter
+from rls.rls_session import RlsSession
 from fastapi import Request
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -276,7 +286,18 @@ rls_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=my_conte
 my_session = Depends(fastapi_dependency_function(rls_sessioner))
 
 @app.get("/users")
-async def get_users(db: Session = my_session):
+async def get_users(db: RlsSession = my_session):
     result = db.execute(text("SELECT * FROM users")).all()
     return dict(result)
+
+or get all users by bypassing the rls policies
+
+@app.get("/users")
+async def get_users(db: RlsSession = my_session):
+    with db.bypass_rls() as session:
+        result = session.execute(text("SELECT * FROM users")).all()
+        return dict(result)
 ```
+---
+## LiCENSE
+[MIT](./LICENSE)
