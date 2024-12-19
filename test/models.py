@@ -2,11 +2,11 @@ from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import column
-from typing import Any
 from rls.schemas import Permissive, Command, ConditionArg
+import typing
 
 # To avoid deletion by pre-commit hooks
-_Any = Any
+_Any = typing.Any
 
 Base = declarative_base()  # type: Any
 
