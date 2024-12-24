@@ -32,8 +32,6 @@ jobs:
         run: |
           poetry install --no-root
 
-
-
       - name: Build package with Poetry
         run: poetry build
 
