@@ -32,4 +32,4 @@ jobs:
         env:
             PYTHONPATH: "${{ github.workspace }}/test"
         run: |
-          python3 -m unittest test_alembic.py
+          python3 -m unittest test/test_alembic.py && python3 -m unittest test/test_rls.py
