@@ -1,2 +1,10 @@
 /venv/
 *pycache*
+build/
+dist/
+*.egg-info
+__pycache__
+.DS_Store
+*.whl
+_version.py
+.pytest_cache/
