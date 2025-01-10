@@ -1,9 +1,10 @@
-from sqlalchemy.orm import sessionmaker
-from rls.rls_session import RlsSession
-from rls.rls_sessioner import RlsSessioner, ContextGetter
 from pydantic import BaseModel
-from test.engines import sync_engine as engine
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
+
+from rls.rls_session import RlsSession
+from rls.rls_sessioner import ContextGetter, RlsSessioner
+from test.engines import sync_engine as engine
 
 
 class ExampleContext(BaseModel):

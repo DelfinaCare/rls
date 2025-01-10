@@ -1,6 +1,8 @@
-from sqlalchemy import text, TextClause
-from .schemas import Command, Policy
 import re
+
+from sqlalchemy import TextClause, text
+
+from .schemas import Command, Policy
 
 
 def add_bypass_rls_to_expr(expr: str) -> str:

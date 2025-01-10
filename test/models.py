@@ -1,9 +1,11 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import column
-from rls.schemas import Permissive, Command, ConditionArg
 import typing
+
+from sqlalchemy import Column, ForeignKey, Integer, String
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import column
+
+from rls.schemas import Command, ConditionArg, Permissive
 
 # To avoid deletion by pre-commit hooks
 _Any = typing.Any

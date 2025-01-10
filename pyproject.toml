@@ -46,3 +46,6 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/DelfinaCare/rls"
 Issues = "https://github.com/DelfinaCare/rls/issues"
+
+[tool.ruff.lint]
+extend-select = ["I"]

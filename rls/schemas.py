@@ -1,12 +1,13 @@
-from enum import Enum
-from typing import List, Literal, Union, Type, Callable, Optional
 import inspect
+from enum import Enum
+from typing import Callable, List, Literal, Optional, Type, Union
+
 from pydantic import BaseModel
+from sqlalchemy import Boolean
+from sqlalchemy.sql import func, sqltypes
 from sqlalchemy.sql.elements import (
     ClauseElement,
 )
-from sqlalchemy import Boolean
-from sqlalchemy.sql import func, sqltypes
 
 
 class Command(str, Enum):

@@ -1,9 +1,8 @@
-from fastapi import FastAPI, Depends
-from rls.rls_sessioner import RlsSessioner
-from test.test_sessioner import my_context, session_maker
+from fastapi import Depends, FastAPI
 from sqlalchemy import text
-from rls.rls_sessioner import fastapi_dependency_function
 
+from rls.rls_sessioner import RlsSessioner, fastapi_dependency_function
+from test.test_sessioner import my_context, session_maker
 
 app = FastAPI()
 

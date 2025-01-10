@@ -1,6 +1,5 @@
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import create_engine
-
+from sqlalchemy.ext.asyncio import create_async_engine
 
 ASYNC_DATABASE_URL = "postgresql+asyncpg://my_user:secure_password@localhost/session"
 SYNC_DATABASE_URL = "postgresql://my_user:secure_password@localhost/session"

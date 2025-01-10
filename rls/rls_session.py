@@ -1,7 +1,8 @@
-from sqlalchemy.orm import Session
+from typing import Optional
+
 from pydantic import BaseModel
 from sqlalchemy import text
-from typing import Optional
+from sqlalchemy.orm import Session
 
 
 class RlsSession(Session):

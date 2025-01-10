@@ -1,12 +1,14 @@
 import unittest
+
 from pydantic import BaseModel
-from testing.postgresql import Postgresql
 from sqlalchemy import create_engine, text
-from test.models import Base
+from sqlalchemy.orm import sessionmaker
+from testing.postgresql import Postgresql
+
 from rls.register_rls import register_rls
 from rls.rls_session import RlsSession
-from rls.rls_sessioner import RlsSessioner, ContextGetter
-from sqlalchemy.orm import sessionmaker
+from rls.rls_sessioner import ContextGetter, RlsSessioner
+from test.models import Base
 
 
 class TestRLSPolicies(unittest.TestCase):

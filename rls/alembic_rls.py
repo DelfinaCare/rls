@@ -4,9 +4,9 @@ from alembic.autogenerate import comparators, renderers
 from alembic.operations import MigrateOperation, Operations
 from sqlalchemy import text
 from sqlalchemy.ext.declarative import DeclarativeMeta
-from .utils import generate_rls_policy, policy_changed_checker
-from .schemas import Policy, Command
 
+from .schemas import Command, Policy
+from .utils import generate_rls_policy, policy_changed_checker
 
 ############################
 # OPERATIONS
@@ -101,7 +101,7 @@ def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     result = conn.execute(
         text(
-            f"""SELECT {', '.join(columns)}
+            f"""SELECT {", ".join(columns)}
                 FROM pg_policies
                 WHERE schemaname = '{schemaname if schemaname else "public"}'
                 AND tablename = '{tablename}';"""

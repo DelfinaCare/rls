@@ -1,7 +1,8 @@
-from rls.rls_session import RlsSession
 from pydantic import BaseModel
-from test.engines import sync_engine as engine
 from sqlalchemy import text
+
+from rls.rls_session import RlsSession
+from test.engines import sync_engine as engine
 
 
 class MyContext(BaseModel):

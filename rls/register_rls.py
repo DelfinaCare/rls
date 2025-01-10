@@ -3,9 +3,9 @@ from typing import Type
 from sqlalchemy import event
 from sqlalchemy.ext.declarative import DeclarativeMeta
 
-from .create_policies import create_policies
-
 from rls.alembic_rls import set_metadata_info
+
+from .create_policies import create_policies
 
 
 def register_rls(Base: Type[DeclarativeMeta]):

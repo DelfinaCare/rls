@@ -1,9 +1,11 @@
 import abc
-from sqlalchemy.orm import sessionmaker as SessionMaker
-from rls.rls_session import RlsSession
-from pydantic import BaseModel
 from typing import Any, Optional
+
 from fastapi import Request
+from pydantic import BaseModel
+from sqlalchemy.orm import sessionmaker as SessionMaker
+
+from rls.rls_session import RlsSession
 
 
 class ContextGetter(abc.ABC):
