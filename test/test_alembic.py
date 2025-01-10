@@ -119,3 +119,7 @@ class TestAlembicOperations(unittest.TestCase):
                         value,
                         f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
                     )
+
+
+if __name__ == "__main__":
+    unittest.main()

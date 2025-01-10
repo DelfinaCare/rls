@@ -231,3 +231,7 @@ class TestRLSPolicies(unittest.TestCase):
             with session.bypass_rls():
                 res = session.execute(text("SELECT * FROM users")).fetchall()
                 self.assertEqual(len(res), 2, "Expected 2 users to be returned.")
+
+
+if __name__ == "__main__":
+    unittest.main()
