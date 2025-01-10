@@ -1,11 +1,16 @@
 import abc
 from typing import Any, Optional
 
-from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy.orm import sessionmaker as SessionMaker
 
 from rls.rls_session import RlsSession
+
+# We only need to use the Request object for the type annotation
+try:
+    from starlette.requests import Request
+except ImportError:
+    Request = Any
 
 
 class ContextGetter(abc.ABC):
