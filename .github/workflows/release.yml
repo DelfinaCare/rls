@@ -2,48 +2,59 @@ name: Semantic Release
 
 on:
   push:
-    tags:
-      - 'v*'
-jobs:
   release:
+    types:
+      - published
+
+jobs:
+  build_wheel:
     runs-on: ubuntu-latest
-    concurrency: release
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: -1
+        fetch-tags: true
+    - uses: actions/setup-python@v5
+      with:
+        python-version: 3.12
+        cache: pip
+    - run: pip wheel .
+    - uses: actions/upload-artifact@v4
+      if: github.repository_owner == 'DelfinaCare'
+      with:
+        name: wheel
+        path: ./*.whl
+
+  # upload_wheel_test:
+  #   needs: [build_wheel]
+  #   runs-on: ubuntu-latest
+  #   if: github.repository_owner == 'DelfinaCare'
+  #   environment:
+  #       name: pypi-test
+  #       url: https://pypi.org/p/rls
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #           name: wheel
+  #           path: dist/
+  #     - uses: pypa/gh-action-pypi-publish@release/v1
+  #       with:
+  #           repository-url: https://test.pypi.org/legacy/
+
+  upload_wheel:
+    needs: [build_wheel]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published' && github.repository_owner == 'DelfinaCare'
+    environment:
+        name: pypi
+        url: https://pypi.org/p/rls
     permissions:
       id-token: write
-      contents: write
-      pull-requests: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          export PATH="$HOME/.local/bin:$PATH"
-
-      - name: Install dependencies
-        run: |
-          poetry install --no-root
-
-      - name: Build package with Poetry
-        run: poetry build
-
-      - name: Create release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
-        run: |
-          gh release create "$tag" \
-              --repo="$GITHUB_REPOSITORY" \
-              --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
-              --generate-notes
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+            name: wheel
+            path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -16,13 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
+          cache: pip
           python-version: 3.12
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          # Add poetry to PATH
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Install Dependencies
-        run: poetry install
+      - name: Install
+        run: pip install -e ".[dev]"
       - name: Run Mypy
-        run: poetry run mypy .
+        run: mypy rls/
