@@ -1,8 +1,9 @@
 from typing import Type
 
+import sqlalchemy as sa
 from alembic.autogenerate import comparators, renderers
 from alembic.operations import MigrateOperation, Operations
-from sqlalchemy import text
+from sqlalchemy.dialects import postgresql as pg_dialect
 from sqlalchemy.ext.declarative import DeclarativeMeta
 
 from .schemas import Command, Policy
@@ -23,8 +24,6 @@ class EnableRlsOp(MigrateOperation):
 
     @classmethod
     def enable_rls(cls, operations, tablename, **kw):
-        """Issue a "CREATE SEQUENCE" instruction."""
-
         op = EnableRlsOp(tablename, **kw)
         return operations.invoke(op)
 
@@ -35,7 +34,7 @@ class EnableRlsOp(MigrateOperation):
 
 @Operations.register_operation("disable_rls")
 class DisableRlsOp(MigrateOperation):
-    """Drop a SEQUENCE."""
+    """Disable RowLevelSecurity."""
 
     def __init__(self, tablename, schemaname=None):
         self.tablename = tablename
@@ -43,8 +42,6 @@ class DisableRlsOp(MigrateOperation):
 
     @classmethod
     def disable_rls(cls, operations, tablename, **kw):
-        """Issue a "DROP SEQUENCE" instruction."""
-
         op = DisableRlsOp(tablename, **kw)
         return operations.invoke(op)
 
@@ -99,14 +96,13 @@ def render_disable_rls(autogen_context, op):
 def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
-    result = conn.execute(
-        text(
-            f"""SELECT {", ".join(columns)}
-                FROM pg_policies
-                WHERE schemaname = '{schemaname if schemaname else "public"}'
-                AND tablename = '{tablename}';"""
-        )
-    ).fetchall()
+    query = (
+        sa.select(*[sa.column(c) for c in columns])
+        .select_from(sa.table("pg_policies"))
+        .where(sa.column("schemaname") == (schemaname or "public"))
+        .where(sa.column("tablename") == tablename)
+    )
+    result = conn.execute(query).fetchall()
     # Convert to a list of dictionaries
     # result_dicts = [dict(zip(columns, row)) for row in result]
 
@@ -134,26 +130,24 @@ def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
 
 def check_table_exists(conn, schemaname, tablename) -> bool:
     result = conn.execute(
-        text(
-            f"""SELECT EXISTS (
-    SELECT 1
-    FROM information_schema.tables
-    WHERE table_schema = '{schemaname if schemaname else "public"}'
-    AND table_name = '{tablename}'
-);"""
+        sa.select(
+            sa.select(sa.literal(1))
+            .select_from(sa.table("tables", schema="information_schema"))
+            .where(sa.column("table_schema") == (schemaname or "public"))
+            .where(sa.column("table_name") == tablename)
+            .exists()
         )
-    ).scalar()
+    )
     return result
 
 
 def check_rls_enabled(conn, schemaname, tablename) -> bool:
+    fq_tablename = sa.literal(f"{schemaname}.tablename" if schemaname else tablename)
     result = conn.execute(
-        text(
-            f"""select relrowsecurity
-        from pg_class
-        where oid = '{tablename}'::regclass;"""
-        )
-    ).scalar()
+        sa.select(sa.column("relrowsecurity"))
+        .select_from(sa.table("pg_class"))
+        .where(sa.column("oid") == sa.cast(fq_tablename, pg_dialect.REGCLASS))
+    )
     return result
 
 
