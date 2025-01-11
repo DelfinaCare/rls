@@ -1,17 +1,23 @@
-name: Code Quality Test
+name: Code Quality
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: chartboost/ruff-action@v1
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: "format --check"
 
   static-analysis:
     runs-on: ubuntu-latest
+    name: Static Analysis
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

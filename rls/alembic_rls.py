@@ -123,7 +123,9 @@ def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
         )
 
         # Set the expression (or any other additional fields) as needed
-        policy.expression = policy_data.get("with_check", "") or policy_data.get("qual", "")
+        policy.expression = policy_data.get("with_check", "") or policy_data.get(
+            "qual", ""
+        )
 
         policies.append(policy)
 
