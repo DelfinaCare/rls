@@ -247,57 +247,9 @@ with  my_sessioner(account_id=11, provider_id=44) as session:
 
 #### Fastapi
 
-if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler
-
-```python
-
-from rls.rls_sessioner import fastapi_dependency_function, ContextGetter
-from rls.rls_session import RlsSession
-from fastapi import Request
-from pydantic import BaseModel
-
-app = FastAPI()
-
-class ExampleContext(BaseModel):
-    account_id: int
-    provider_id: int
+if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_app.py`](test/fastapi_app.py).
 
 
-# Concrete implementation of ContextGetter
-class ExampleContextGetter(ContextGetter):
-    def get_context(self, *args, **kwargs) -> ExampleContext:
-        request: Request = kwargs.get('request')
-
-        account_id = request.headers.get('account_id')
-        provider_id = request.headers.get('provider_id')
-
-        return ExampleContext(account_id=account_id, provider_id=provider_id)
-
-
-my_context = ExampleContextGetter()
-
-session_maker = sessionmaker(
-    class_=RlsSession, autoflush=False, autocommit=False, bind=engine
-)
-
-
-
-rls_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=my_context)
-my_session = Depends(fastapi_dependency_function(rls_sessioner))
-
-@app.get("/users")
-async def get_users(db: RlsSession = my_session):
-    result = db.execute(text("SELECT * FROM users")).all()
-    return dict(result)
-
-or get all users by bypassing the rls policies
-
-@app.get("/users")
-async def get_users(db: RlsSession = my_session):
-    with db.bypass_rls() as session:
-        result = session.execute(text("SELECT * FROM users")).all()
-        return dict(result)
-```
 ---
 ## LiCENSE
 [MIT](./LICENSE)

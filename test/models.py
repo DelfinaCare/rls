@@ -1,16 +1,14 @@
 import typing
 
+import pydantic
 from sqlalchemy import Column, ForeignKey, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import column
 
+from rls.register_rls import register_rls
 from rls.schemas import Command, ConditionArg, Permissive
 
-# To avoid deletion by pre-commit hooks
-_Any = typing.Any
-
-Base = declarative_base()  # type: Any
+Base: typing.Any = register_rls(declarative_base())
 
 
 class User(Base):
@@ -67,3 +65,7 @@ class Item(Base):
             custom_policy_name="smaller_than_or_equal_accountId_policy",
         ),
     ]
+
+
+class SampleRlsContext(pydantic.BaseModel):
+    account_id: int | None

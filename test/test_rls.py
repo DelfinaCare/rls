@@ -1,100 +1,36 @@
 import unittest
 
-from pydantic import BaseModel
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
-from testing.postgresql import Postgresql
 
-from rls.register_rls import register_rls
 from rls.rls_session import RlsSession
 from rls.rls_sessioner import ContextGetter, RlsSessioner
-from test.models import Base
+from test import database, models
 
 
 class TestRLSPolicies(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Start a temporary PostgreSQL instance
-        cls.postgresql = Postgresql()
-        cls.admin_engine = create_engine(cls.postgresql.url())
-        cls.connection = cls.admin_engine.connect()
-
-        # Adds the event listener
-        base = register_rls(Base)
-        cls.metadata = base.metadata
-        base.metadata.create_all(bind=cls.admin_engine)
-
-        # cls.rls_session = RlsSession(bind=cls.engine)
-
-        with cls.connection.begin():
-            cls.connection.execute(
-                text("""
-                    -- Insert user 1
-                    INSERT INTO users (username) VALUES ('user1');
-
-                    -- Insert user 2
-                    INSERT INTO users (username) VALUES ('user2');
-
-
-                    -- Insert items for user 1 (id of user1 is assumed to be 1)
-                    INSERT INTO items (title, description, owner_id) VALUES
-                    ('Item 1 for User 1', 'Description of item 1 for user 1', 1),
-                    ('Item 2 for User 1', 'Description of item 2 for user 1', 1);
-
-                    -- Insert items for user 2 (id of user2 is assumed to be 2)
-                    INSERT INTO items (title, description, owner_id) VALUES
-                    ('Item 1 for User 2', 'Description of item 1 for user 2', 2),
-                    ('Item 2 for User 2', 'Description of item 2 for user 2', 2);
-                    """)
-            )
-
-        # Use a non-superadmin user for the test connection
-        non_superadmin_user = "test_user"
-        password = "test_password"
-        database = cls.postgresql.dsn()["database"]
-        port = cls.postgresql.dsn()["port"]
-        host = cls.postgresql.dsn()["host"]
-        with cls.connection.begin():
-            cls.connection.execute(
-                text(f"""
-                CREATE USER {non_superadmin_user} WITH PASSWORD '{password}';
-                GRANT CONNECT ON DATABASE {database} TO {non_superadmin_user};
-                GRANT USAGE ON SCHEMA public TO {non_superadmin_user};
-                ALTER ROLE {non_superadmin_user} WITH LOGIN;
-                GRANT SELECT ON ALL TABLES IN SCHEMA public TO {non_superadmin_user};
-                                        """)
-            )
-
-            permissions = cls.connection.execute(
-                text(
-                    "SELECT rolname, rolsuper, rolcanlogin FROM pg_roles WHERE rolname = 'test_user';"
-                )
-            ).fetchall()
-            print("my_user perms:", permissions)
-
-        # Create the engine with the non-superadmin user's credentials
-        cls.non_superadmin_engine = create_engine(
-            f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
+        cls.instance = database.test_postgres_instance()
+        cls.admin_engine = cls.instance.admin_engine
+        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
+        cls.session_maker = sessionmaker(
+            class_=RlsSession,
+            autoflush=False,
+            autocommit=False,
+            bind=cls.instance.non_superadmin_engine,
         )
-
-        # Set up RLS policies and other test configurations
-        # cls.connection = cls.non_superadmin_engine.connect()
 
     @classmethod
     def tearDownClass(cls):
-        cls.connection.close()
-        cls.admin_engine.dispose()
-        cls.non_superadmin_engine.dispose()
-        cls.postgresql.stop()
+        del cls.instance
 
-    # @skip
     def test_policy_creation(self):
         # Check that RLS policies exist in the database
-        with self.connection.begin():
-            self.connection.execute(text("SET ROLE postgres;"))
+        with self.admin_engine.connect() as session:
             # We checked for two tables at once because tablename is auto applied to policy name so we don't have to check separately
             policies = (
-                self.connection.execute(
+                session.execute(
                     text("""
                 SELECT policyname, permissive, qual, with_check, cmd
                 FROM pg_policies
@@ -168,12 +104,8 @@ class TestRLSPolicies(unittest.TestCase):
                         f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
                     )
 
-    # @skip
     def test_rls_query_with_rls_session_and_bypass(self):
-        class MyContext(BaseModel):
-            account_id: int
-
-        context = MyContext(account_id=1)
+        context = models.SampleRlsContext(account_id=1)
 
         rls_session = RlsSession(context=context, bind=self.non_superadmin_engine)
 
@@ -198,26 +130,14 @@ class TestRLSPolicies(unittest.TestCase):
                 self.assertEqual(len(my_user), 2, "Expected 2 users to be returned.")
 
     def test_rls_query_with_rls_sessioner_and_bypass(self):
-        class ExampleContext(BaseModel):
-            account_id: int
-
         # Concrete implementation of ContextGetter
         class ExampleContextGetter(ContextGetter):
-            def get_context(self, *args, **kwargs) -> ExampleContext:
+            def get_context(self, *args, **kwargs) -> models.SampleRlsContext:
                 account_id = kwargs.get("account_id", 1)
-                return ExampleContext(account_id=account_id)
-
-        my_context = ExampleContextGetter()
-
-        session_maker = sessionmaker(
-            class_=RlsSession,
-            autoflush=False,
-            autocommit=False,
-            bind=self.non_superadmin_engine,
-        )
+                return models.SampleRlsContext(account_id=account_id)
 
         my_sessioner = RlsSessioner(
-            sessionmaker=session_maker, context_getter=my_context
+            sessionmaker=self.session_maker, context_getter=ExampleContextGetter()
         )
 
         with my_sessioner(account_id=1) as session:
