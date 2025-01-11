@@ -147,7 +147,7 @@ def check_rls_enabled(conn, schemaname, tablename) -> bool:
         sa.select(sa.column("relrowsecurity"))
         .select_from(sa.table("pg_class"))
         .where(sa.column("oid") == sa.cast(fq_tablename, pg_dialect.REGCLASS))
-    )
+    ).scalar()
     return result
 
 
