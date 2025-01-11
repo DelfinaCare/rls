@@ -137,7 +137,7 @@ def check_table_exists(conn, schemaname, tablename) -> bool:
             .where(sa.column("table_name") == tablename)
             .exists()
         )
-    )
+    ).scalar()
     return result
 
 
