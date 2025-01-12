@@ -3,7 +3,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["once/*"]
+include = ["rls/*"]
 dev-mode-dirs = ["."]
 
 [tool.hatch.version]
