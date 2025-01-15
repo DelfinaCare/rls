@@ -6,43 +6,16 @@ a package to provide row level security seamlessly to your python app by extendi
 
 ## Installation
 
-### Package
-
 ```bash
 pip install rls
 ```
 
-or if you are using poetry
-
-```bash
-poetry add rls
-```
-
-### Source Code
-
-After cloning the repo use it as you would use the package but import from your local cloned files
-
-
----
-
-## Usage Example
+## Usage
 
 ### Creating Policies
+For a full working example, please see [`test/models.py`](test/models.py).
 
 ```python
-from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import column
-from rls.schemas import Permissive, Command, ConditionArg
-import Typing
-
-# To avoid deletion by pre-commit hooks
-_Any = typing.Any
-
-Base = declarative_base()  # type: Any
-
-
 class User(Base):
     __tablename__ = "users"
 
@@ -123,7 +96,8 @@ ConditionArg(comparator_name="account_id", type=Integer)
 
 
 #### Expressions
-You can utilize lambda functions to create policies dynamically
+You can utilize lambda functions to create policies dynamically which
+operate on the `ConditionArg`(s) to define the policy. For example:
 
 ```python
 from sqlalchemy import column
