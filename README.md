@@ -221,7 +221,7 @@ with  my_sessioner(account_id=11, provider_id=44) as session:
 
 #### Fastapi
 
-if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_app.py`](test/fastapi_app.py).
+if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_sample.py`](test/fastapi_sample.py).
 
 
 ---
