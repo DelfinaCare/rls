@@ -110,18 +110,22 @@ def disable_rls(operations, operation):
 ############################
 
 
-@renderers.dispatch_for(EnableRlsOp)
-def render_enable_rls(autogen_context, op):
+def _add_rls_imports(autogen_context) -> None:
+    """Add the imports needed for RLS cast calls in generated migration files."""
     autogen_context.imports.add("from typing import cast")
     autogen_context.imports.add("from rls.alembic_rls import RLSOp")
-    return "cast(RLSOp, op).enable_rls(%r)" % (op.tablename,)
+
+
+@renderers.dispatch_for(EnableRlsOp)
+def render_enable_rls(autogen_context, op):
+    _add_rls_imports(autogen_context)
+    return "cast(RLSOp, op).enable_rls(%r)" % op.tablename
 
 
 @renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
-    autogen_context.imports.add("from typing import cast")
-    autogen_context.imports.add("from rls.alembic_rls import RLSOp")
-    return "cast(RLSOp, op).disable_rls(%r)" % (op.tablename,)
+    _add_rls_imports(autogen_context)
+    return "cast(RLSOp, op).disable_rls(%r)" % op.tablename
 
 
 ############################
@@ -403,15 +407,13 @@ def drop_policy(operations, operation):
 
 @renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
-    autogen_context.imports.add("from typing import cast")
-    autogen_context.imports.add("from rls.alembic_rls import RLSOp")
+    _add_rls_imports(autogen_context)
     return f"cast(RLSOp, op).create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
 
 
 @renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
-    autogen_context.imports.add("from typing import cast")
-    autogen_context.imports.add("from rls.alembic_rls import RLSOp")
+    _add_rls_imports(autogen_context)
     return f"cast(RLSOp, op).drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
 
 
