@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from testing.postgresql import Postgresql  # type: ignore
+from testing.postgresql import Postgresql
 
 from test import models
 

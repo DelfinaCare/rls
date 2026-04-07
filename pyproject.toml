@@ -49,5 +49,11 @@ dev = [
 Homepage = "https://github.com/DelfinaCare/rls"
 Issues = "https://github.com/DelfinaCare/rls/issues"
 
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = "testing.*"
+ignore_missing_imports = true
+
 [tool.ruff.lint]
 extend-select = ["I"]
