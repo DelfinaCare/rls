@@ -1,4 +1,4 @@
-from typing import Any, Protocol, Type
+from typing import Type
 
 import sqlalchemy as sa
 from alembic.autogenerate import comparators, renderers
@@ -12,38 +12,6 @@ from .utils import generate_rls_policy, policy_changed_checker
 ############################
 # OPERATIONS
 ############################
-
-
-class RLSOp(Protocol):
-    """Protocol describing Alembic Operations extended with RLS custom operations.
-
-    Use ``cast(RLSOp, op)`` in migration files to call the custom operations
-    with proper type checking.
-    """
-
-    def enable_rls(self, tablename: str, **kw: Any) -> None: ...
-
-    def disable_rls(self, tablename: str, **kw: Any) -> None: ...
-
-    def create_policy(
-        self,
-        table_name: str,
-        policy_name: str,
-        cmd: str,
-        definition: str,
-        expr: str,
-        **kw: Any,
-    ) -> None: ...
-
-    def drop_policy(
-        self,
-        table_name: str,
-        policy_name: str,
-        cmd: str,
-        definition: str,
-        expr: str,
-        **kw: Any,
-    ) -> None: ...
 
 
 @Operations.register_operation("enable_rls")
@@ -110,22 +78,14 @@ def disable_rls(operations, operation):
 ############################
 
 
-def _add_rls_imports(autogen_context) -> None:
-    """Add the imports needed for RLS cast calls in generated migration files."""
-    autogen_context.imports.add("from typing import cast")
-    autogen_context.imports.add("from rls.alembic_rls import RLSOp")
-
-
 @renderers.dispatch_for(EnableRlsOp)
 def render_enable_rls(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return "cast(RLSOp, op).enable_rls(%r)" % op.tablename
+    return "op.enable_rls(%r)  # type: ignore" % (op.tablename)
 
 
 @renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return "cast(RLSOp, op).disable_rls(%r)" % op.tablename
+    return "op.disable_rls(%r)  # type: ignore" % (op.tablename)
 
 
 ############################
@@ -407,14 +367,12 @@ def drop_policy(operations, operation):
 
 @renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return f"cast(RLSOp, op).create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return f"op.create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
 @renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return f"cast(RLSOp, op).drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return f"op.drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
 def set_metadata_info(Base: Type[DeclarativeMeta]):
