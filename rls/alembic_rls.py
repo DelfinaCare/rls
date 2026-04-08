@@ -1,21 +1,21 @@
 from typing import Type
 
 import sqlalchemy as sa
-from alembic.autogenerate import comparators, renderers
-from alembic.operations import MigrateOperation, Operations
+from alembic import autogenerate
+from alembic import operations as alembic_operations
 from sqlalchemy.dialects import postgresql as pg_dialect
-from sqlalchemy.ext.declarative import DeclarativeMeta
+from sqlalchemy.ext import declarative
 
-from .schemas import Command, Policy
-from .utils import generate_rls_policy, policy_changed_checker
+from . import schemas
+from . import utils
 
 ############################
 # OPERATIONS
 ############################
 
 
-@Operations.register_operation("enable_rls")
-class EnableRlsOp(MigrateOperation):
+@alembic_operations.Operations.register_operation("enable_rls")
+class EnableRlsOp(alembic_operations.MigrateOperation):
     """Enable RowLevelSecurity."""
 
     def __init__(self, tablename, schemaname=None):
@@ -32,8 +32,8 @@ class EnableRlsOp(MigrateOperation):
         return DisableRlsOp(self.tablename, schemaname=self.schemaname)
 
 
-@Operations.register_operation("disable_rls")
-class DisableRlsOp(MigrateOperation):
+@alembic_operations.Operations.register_operation("disable_rls")
+class DisableRlsOp(alembic_operations.MigrateOperation):
     """Disable RowLevelSecurity."""
 
     def __init__(self, tablename, schemaname=None):
@@ -55,7 +55,7 @@ class DisableRlsOp(MigrateOperation):
 ############################
 
 
-@Operations.implementation_for(EnableRlsOp)
+@alembic_operations.Operations.implementation_for(EnableRlsOp)
 def enable_rls(operations, operation):
     if operation.schemaname is not None:
         name = "%s.%s" % (operation.schemaname, operation.tablename)
@@ -64,7 +64,7 @@ def enable_rls(operations, operation):
     operations.execute("ALTER TABLE %s ENABLE ROW LEVEL SECURITY" % name)
 
 
-@Operations.implementation_for(DisableRlsOp)
+@alembic_operations.Operations.implementation_for(DisableRlsOp)
 def disable_rls(operations, operation):
     if operation.schemaname is not None:
         name = "%s.%s" % (operation.schemaname, operation.sequence_name)
@@ -78,12 +78,12 @@ def disable_rls(operations, operation):
 ############################
 
 
-@renderers.dispatch_for(EnableRlsOp)
+@autogenerate.renderers.dispatch_for(EnableRlsOp)
 def render_enable_rls(autogen_context, op):
     return "op.enable_rls(%r)  # type: ignore" % (op.tablename)
 
 
-@renderers.dispatch_for(DisableRlsOp)
+@autogenerate.renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
     return "op.disable_rls(%r)  # type: ignore" % (op.tablename)
 
@@ -93,7 +93,7 @@ def render_disable_rls(autogen_context, op):
 ############################
 
 
-def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
+def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     query = (
@@ -112,7 +112,7 @@ def check_rls_policies(conn, schemaname, tablename) -> list[Policy]:
         policy_data = dict(zip(columns, row))
 
         # Map the database fields to Policy attributes
-        policy = Policy(
+        policy = schemas.Policy(
             definition=policy_data.get("permissive", ""),
             cmd=policy_data.get("cmd", ""),
             custom_policy_name=policy_data.get("policyname", ""),
@@ -151,7 +151,7 @@ def check_rls_enabled(conn, schemaname, tablename) -> bool:
     return result
 
 
-@comparators.dispatch_for("table")
+@autogenerate.comparators.dispatch_for("table")
 def compare_table_level(
     autogen_context, modify_ops, schemaname, tablename, conn_table, metadata_table
 ):
@@ -191,12 +191,12 @@ def compare_table_level(
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
             current_cmd = ""
             if isinstance(policy_meta.cmd, list):
-                if isinstance(policy_meta.cmd[ix], Command):
+                if isinstance(policy_meta.cmd[ix], schemas.Command):
                     current_cmd = policy_meta.cmd[ix].value
                 else:
                     current_cmd = policy_meta.cmd[ix]
             else:
-                if isinstance(policy_meta.cmd, Command):
+                if isinstance(policy_meta.cmd, schemas.Command):
                     current_cmd = policy_meta.cmd.value
                 else:
                     current_cmd = policy_meta.cmd
@@ -225,8 +225,8 @@ def compare_table_level(
                 # Policy exists in both metadata and database, so check if it needs to be updated
                 # Notice: Matched policy is db policy
                 tmp_policy_meta = policy_meta.model_copy()
-                tmp_policy_meta.cmd = Command(current_cmd)
-                if not policy_changed_checker(
+                tmp_policy_meta.cmd = schemas.Command(current_cmd)
+                if not utils.policy_changed_checker(
                     db_policy=matched_policy, metadata_policy=tmp_policy_meta
                 ):
                     # Policy has changed, so drop and recreate it
@@ -274,8 +274,8 @@ def compare_table_level(
             )
 
 
-@Operations.register_operation("create_policy")
-class CreatePolicyOp(MigrateOperation):
+@alembic_operations.Operations.register_operation("create_policy")
+class CreatePolicyOp(alembic_operations.MigrateOperation):
     """Operation to create a new RLS policy."""
 
     def __init__(self, table_name, policy_name, definition, cmd, expr):
@@ -302,8 +302,8 @@ class CreatePolicyOp(MigrateOperation):
         )
 
 
-@Operations.register_operation("drop_policy")
-class DropPolicyOp(MigrateOperation):
+@alembic_operations.Operations.register_operation("drop_policy")
+class DropPolicyOp(alembic_operations.MigrateOperation):
     """Operation to drop an RLS policy."""
 
     def __init__(self, table_name, policy_name, definition, cmd, expr):
@@ -338,7 +338,7 @@ class DropPolicyOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(CreatePolicyOp)
+@alembic_operations.Operations.implementation_for(CreatePolicyOp)
 def create_policy(operations, operation):
     table_name = operation.table_name
     policy_name = operation.policy_name
@@ -348,7 +348,7 @@ def create_policy(operations, operation):
 
     # Generate the SQL to create the policy
 
-    sql = generate_rls_policy(
+    sql = utils.generate_rls_policy(
         cmd=cmd,
         definition=definition,
         policy_name=policy_name,
@@ -359,23 +359,23 @@ def create_policy(operations, operation):
     operations.execute(sql)
 
 
-@Operations.implementation_for(DropPolicyOp)
+@alembic_operations.Operations.implementation_for(DropPolicyOp)
 def drop_policy(operations, operation):
     sql = f"DROP POLICY {operation.policy_name} ON {operation.table_name};"
     operations.execute(sql)
 
 
-@renderers.dispatch_for(CreatePolicyOp)
+@autogenerate.renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
     return f"op.create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
-@renderers.dispatch_for(DropPolicyOp)
+@autogenerate.renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
     return f"op.drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
-def set_metadata_info(Base: Type[DeclarativeMeta]):
+def set_metadata_info(Base: Type[declarative.DeclarativeMeta]):
     """RLS policies are first added to the Metadata before applied."""
     Base.metadata.info.setdefault("rls_policies", dict())
     for mapper in Base.registry.mappers:

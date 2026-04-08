@@ -1,8 +1,8 @@
 import re
 
-from sqlalchemy import TextClause, text
+import sqlalchemy
 
-from .schemas import Command, Policy
+from . import schemas
 
 
 def add_bypass_rls_to_expr(expr: str) -> str:
@@ -14,12 +14,12 @@ def add_bypass_rls_to_expr(expr: str) -> str:
 
 def generate_rls_policy(
     cmd: str, definition: str, policy_name: str, table_name: str, expr: str
-) -> TextClause:
+) -> sqlalchemy.TextClause:
     if "rls.bypass_rls" not in expr:
         expr = add_bypass_rls_to_expr(expr)
 
     if cmd in ["ALL", "SELECT", "DELETE"]:
-        return text(f"""
+        return sqlalchemy.text(f"""
                 CREATE POLICY {policy_name} ON {table_name}
                 AS {definition}
                 FOR {cmd}
@@ -28,7 +28,7 @@ def generate_rls_policy(
 
     elif cmd == "UPDATE":
         # UPDATE requires both USING and WITH CHECK
-        return text(f"""
+        return sqlalchemy.text(f"""
             CREATE POLICY {policy_name} ON {table_name}
             AS {definition}
             FOR {cmd}
@@ -37,7 +37,7 @@ def generate_rls_policy(
         """)
 
     elif cmd in ["INSERT"]:
-        return text(f"""
+        return sqlalchemy.text(f"""
                 CREATE POLICY {policy_name} ON {table_name}
                 AS {definition}
                 FOR {cmd}
@@ -48,12 +48,12 @@ def generate_rls_policy(
         raise ValueError(f'Unknown policy command"{cmd}"')
 
 
-def policy_changed_checker(db_policy: Policy, metadata_policy: Policy) -> bool:
+def policy_changed_checker(db_policy: schemas.Policy, metadata_policy: schemas.Policy) -> bool:
     temp_metadata_policy = metadata_policy.model_copy()
     temp_metadata_policy.expression = add_bypass_rls_to_expr(metadata_policy.expression)
 
     if isinstance(temp_metadata_policy.cmd, list):
-        temp_metadata_policy.cmd = Command(temp_metadata_policy.cmd[0])
+        temp_metadata_policy.cmd = schemas.Command(temp_metadata_policy.cmd[0])
 
     return bool(db_policy == temp_metadata_policy)
 

@@ -1,18 +1,18 @@
 from typing import Type
 
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
-from sqlalchemy.ext.declarative import DeclarativeMeta
+import sqlalchemy
+from sqlalchemy import engine
+from sqlalchemy.ext import declarative
 
 
-def create_policies(Base: Type[DeclarativeMeta], connection: Connection):
+def create_policies(Base: Type[declarative.DeclarativeMeta], connection: engine.Connection):
     """Create policies for `Base.metadata.create_all()`."""
     for table, settings in Base.metadata.info["rls_policies"].items():
         # enable
-        stmt = text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
+        stmt = sqlalchemy.text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
         connection.execute(stmt)
         # force by default
-        stmt = text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")
+        stmt = sqlalchemy.text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")
         connection.execute(stmt)
         # policies
         for ix, policy in enumerate(settings):

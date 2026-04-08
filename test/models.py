@@ -1,29 +1,29 @@
 import typing
 
 import pydantic
-from sqlalchemy import Column, ForeignKey, Integer, String
-from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.sql import column
+import sqlalchemy
+from sqlalchemy import orm
+from sqlalchemy import sql
 
-from rls.register_rls import register_rls
-from rls.schemas import Command, ConditionArg, Permissive
+from rls import register_rls
+from rls import schemas
 
-Base: typing.Any = register_rls(declarative_base())
+Base: typing.Any = register_rls.register_rls(orm.declarative_base())
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
+    username = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
 
     __rls_policies__ = [
-        Permissive(
+        schemas.Permissive(
             condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
+                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
             ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("id") == x,
+            cmd=[schemas.Command.select, schemas.Command.update],
+            custom_expr=lambda x: sql.column("id") == x,
             custom_policy_name="equal_to_accountId_policy",
         ),
     ]
@@ -32,36 +32,36 @@ class User(Base):
 class Item(Base):
     __tablename__ = "items"
 
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(String)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
+    title = sqlalchemy.Column(sqlalchemy.String, index=True)
+    description = sqlalchemy.Column(sqlalchemy.String)
+    owner_id = sqlalchemy.Column(sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id", ondelete="CASCADE"))
 
-    owner = relationship("User")
+    owner = orm.relationship("User")
 
     __rls_policies__ = [
-        Permissive(
+        schemas.Permissive(
             condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
+                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
             ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("owner_id") == x,
+            cmd=[schemas.Command.select, schemas.Command.update],
+            custom_expr=lambda x: sql.column("owner_id") == x,
             custom_policy_name="equal_to_accountId_policy",
         ),
-        Permissive(
+        schemas.Permissive(
             condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
+                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
             ],
-            cmd=[Command.select],
-            custom_expr=lambda x: column("owner_id") > x,
+            cmd=[schemas.Command.select],
+            custom_expr=lambda x: sql.column("owner_id") > x,
             custom_policy_name="greater_than_accountId_policy",
         ),
-        Permissive(
+        schemas.Permissive(
             condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
+                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
             ],
-            cmd=[Command.all],
-            custom_expr=lambda x: column("owner_id") <= x,
+            cmd=[schemas.Command.all],
+            custom_expr=lambda x: sql.column("owner_id") <= x,
             custom_policy_name="smaller_than_or_equal_accountId_policy",
         ),
     ]

@@ -1,10 +1,10 @@
 import unittest
 
-from sqlalchemy import text
-from sqlalchemy.orm import sessionmaker
+import sqlalchemy
+from sqlalchemy import orm
 
-from rls.rls_session import RlsSession
-from rls.rls_sessioner import ContextGetter, RlsSessioner
+from rls import rls_session
+from rls import rls_sessioner
 from test import database, models
 
 
@@ -14,8 +14,8 @@ class TestRLSPolicies(unittest.TestCase):
         cls.instance = database.test_postgres_instance()
         cls.admin_engine = cls.instance.admin_engine
         cls.non_superadmin_engine = cls.instance.non_superadmin_engine
-        cls.session_maker = sessionmaker(
-            class_=RlsSession,
+        cls.session_maker = orm.sessionmaker(
+            class_=rls_session.RlsSession,
             autoflush=False,
             autocommit=False,
             bind=cls.instance.non_superadmin_engine,
@@ -31,7 +31,7 @@ class TestRLSPolicies(unittest.TestCase):
             # We checked for two tables at once because tablename is auto applied to policy name so we don't have to check separately
             policies = (
                 session.execute(
-                    text("""
+                    sqlalchemy.text("""
                 SELECT policyname, permissive, qual, with_check, cmd
                 FROM pg_policies
                 WHERE tablename IN ('items', 'users');
@@ -107,12 +107,12 @@ class TestRLSPolicies(unittest.TestCase):
     def test_rls_query_with_rls_session_and_bypass(self):
         context = models.SampleRlsContext(account_id=1)
 
-        rls_session = RlsSession(context=context, bind=self.non_superadmin_engine)
+        rls_sess = rls_session.RlsSession(context=context, bind=self.non_superadmin_engine)
 
-        with rls_session.begin():
+        with rls_sess.begin():
             # Test Policy on table users with SELECT where (id = account_id)
             my_user = (
-                rls_session.execute(text("SELECT * FROM users;")).mappings().fetchall()
+                rls_sess.execute(sqlalchemy.text("SELECT * FROM users;")).mappings().fetchall()
             )
             self.assertEqual(len(my_user), 1, "Expected 1 user to be returned.")
             self.assertEqual(my_user[0]["id"], 1, "Expected user id to be 1.")
@@ -121,9 +121,9 @@ class TestRLSPolicies(unittest.TestCase):
             )
 
             # Test bypassing RLS
-            with rls_session.bypass_rls():
+            with rls_sess.bypass_rls():
                 my_user = (
-                    rls_session.execute(text("SELECT * FROM users;"))
+                    rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
                     .mappings()
                     .fetchall()
                 )
@@ -131,17 +131,17 @@ class TestRLSPolicies(unittest.TestCase):
 
     def test_rls_query_with_rls_sessioner_and_bypass(self):
         # Concrete implementation of ContextGetter
-        class ExampleContextGetter(ContextGetter):
+        class ExampleContextGetter(rls_sessioner.ContextGetter):
             def get_context(self, *args, **kwargs) -> models.SampleRlsContext:
                 account_id = kwargs.get("account_id", 1)
                 return models.SampleRlsContext(account_id=account_id)
 
-        my_sessioner = RlsSessioner(
+        my_sessioner = rls_sessioner.RlsSessioner(
             sessionmaker=self.session_maker, context_getter=ExampleContextGetter()
         )
 
         with my_sessioner(account_id=1) as session:
-            res = session.execute(text("SELECT * FROM users")).mappings().fetchall()
+            res = session.execute(sqlalchemy.text("SELECT * FROM users")).mappings().fetchall()
             self.assertEqual(len(res), 1, "Expected 1 user to be returned.")
             self.assertEqual(res[0]["id"], 1, "Expected user id to be 1.")
             self.assertEqual(
@@ -149,7 +149,7 @@ class TestRLSPolicies(unittest.TestCase):
             )
 
             with session.bypass_rls():
-                res = session.execute(text("SELECT * FROM users")).fetchall()
+                res = session.execute(sqlalchemy.text("SELECT * FROM users")).fetchall()
                 self.assertEqual(len(res), 2, "Expected 2 users to be returned.")
 
 

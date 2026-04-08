@@ -1,28 +1,28 @@
 import abc
 from typing import Any, Optional
 
-from fastapi import Request
-from pydantic import BaseModel
-from sqlalchemy.orm import sessionmaker as SessionMaker
+import fastapi
+import pydantic
+from sqlalchemy import orm
 
-from rls.rls_session import RlsSession
+from rls import rls_session
 
 
 class ContextGetter(abc.ABC):
     @abc.abstractmethod
-    def get_context(self, *args, **kwargs) -> BaseModel:
+    def get_context(self, *args, **kwargs) -> pydantic.BaseModel:
         """Abstract method to get context"""
         pass
 
 
 class RlsSessioner:
-    def __init__(self, sessionmaker: SessionMaker, context_getter: ContextGetter):
-        if not issubclass(sessionmaker.class_, RlsSession):
+    def __init__(self, sessionmaker: orm.sessionmaker, context_getter: ContextGetter):
+        if not issubclass(sessionmaker.class_, rls_session.RlsSession):
             raise ValueError(
                 "sessionmaker class must be RlsSession or a subclass of RlsSession"
             )
 
-        self.session_maker: SessionMaker[RlsSession] = sessionmaker
+        self.session_maker: orm.sessionmaker[rls_session.RlsSession] = sessionmaker
         self.context_getter: ContextGetter = context_getter
 
     def __call__(
@@ -43,7 +43,7 @@ class RlsSessioner:
 
 
 def fastapi_dependency_function(RlsSessioner: RlsSessioner):
-    def dependency_function(request: Request):
+    def dependency_function(request: fastapi.Request):
         return RlsSessioner(request=request)
 
     return dependency_function

@@ -1,11 +1,11 @@
 import sqlalchemy as sa
-from testing.postgresql import Postgresql
+import testing.postgresql
 
 from test import models
 
 
 class TestPostgres:
-    postgresql: Postgresql
+    postgresql: testing.postgresql.Postgresql
     admin_engine: sa.engine.Engine
     non_superadmin_engine: sa.engine.Engine
 
@@ -18,7 +18,7 @@ class TestPostgres:
 def test_postgres_instance() -> TestPostgres:
     """Returns a test postgres instance seeded with data."""
     inst = TestPostgres()
-    inst.postgresql = Postgresql()
+    inst.postgresql = testing.postgresql.Postgresql()
     inst.admin_engine = sa.create_engine(inst.postgresql.url())
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
