@@ -2,12 +2,10 @@ import inspect
 from enum import Enum
 from typing import Callable, List, Literal, Optional, Type, Union
 
-from pydantic import BaseModel
-from sqlalchemy import Boolean
-from sqlalchemy.sql import func, sqltypes
-from sqlalchemy.sql.elements import (
-    ClauseElement,
-)
+import pydantic
+import sqlalchemy
+from sqlalchemy import sql
+from sqlalchemy.sql import elements
 
 
 class Command(str, Enum):
@@ -19,20 +17,20 @@ class Command(str, Enum):
     delete = "DELETE"
 
 
-class ConditionArg(BaseModel):
+class ConditionArg(pydantic.BaseModel):
     comparator_name: str
-    type: Type[sqltypes.TypeEngine]
+    type: Type[sql.sqltypes.TypeEngine]
 
 
-class Policy(BaseModel):
+class Policy(pydantic.BaseModel):
     definition: str
     condition_args: Optional[List[ConditionArg]] = None
     cmd: Union[Command, List[Command]]
-    custom_expr: Optional[Callable[..., ClauseElement]] = None
+    custom_expr: Optional[Callable[..., elements.ClauseElement]] = None
     custom_policy_name: Optional[str] = None
 
     __policy_names: List[str] = []
-    __compiled_custom_expr: Optional[ClauseElement] = None
+    __compiled_custom_expr: Optional[elements.ClauseElement] = None
     __expr: str = ""
     __policy_suffix: str = ""
     __condition_args_prefix: str = "rls"
@@ -60,7 +58,7 @@ class Policy(BaseModel):
         If not, it casts the expression to Boolean.
         """
         # Check if the expression is already of Boolean type
-        if isinstance(self.__compiled_custom_expr.type, Boolean):
+        if isinstance(self.__compiled_custom_expr.type, sqlalchemy.Boolean):
             return True
 
         # Otherwise, cast the expression to Boolean explicitly or raise an error
@@ -82,7 +80,7 @@ class Policy(BaseModel):
         """Convert the lambda function to a SQLAlchemy expression."""
         args = []
         for arg in self.condition_args:
-            wrapped_value = func.current_setting(
+            wrapped_value = sql.func.current_setting(
                 f"{self.__condition_args_prefix}.{arg.comparator_name}", True
             ).cast(arg.type)
             args.append(wrapped_value)
@@ -105,7 +103,7 @@ class Policy(BaseModel):
             )
 
     def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
-        from .utils import generate_rls_policy
+        from . import utils
 
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
         self.__policy_suffix = name_suffix
@@ -131,7 +129,7 @@ class Policy(BaseModel):
 
             self.__policy_names.append(policy_name)
 
-            generated_policy = generate_rls_policy(
+            generated_policy = utils.generate_rls_policy(
                 cmd=cmd_value,
                 definition=self.definition,
                 policy_name=policy_name,
@@ -142,14 +140,14 @@ class Policy(BaseModel):
         return policy_lists
 
     def __eq__(self, other):
-        from .utils import compare_between_policy_sql_expressions
+        from . import utils
 
         if not isinstance(other, Policy):
             return NotImplemented
 
         definition_check = self.definition == other.definition
         cmd_check = self.cmd == other.cmd
-        expression_check = compare_between_policy_sql_expressions(
+        expression_check = utils.compare_between_policy_sql_expressions(
             self.expression, other.expression
         )
 

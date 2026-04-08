@@ -1,12 +1,12 @@
 from typing import Optional
 
-from pydantic import BaseModel
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+import pydantic
+import sqlalchemy
+from sqlalchemy import orm
 
 
-class RlsSession(Session):
-    def __init__(self, context: Optional[BaseModel] = None, *args, **kwargs):
+class RlsSession(orm.Session):
+    def __init__(self, context: Optional[pydantic.BaseModel] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass = False  # Track RLS bypass state
         if context is not None:
@@ -28,7 +28,7 @@ class RlsSession(Session):
             return None
 
         for key, value in self.context.model_dump().items():
-            stmt = text(f"SET rls.{key} = {value};")
+            stmt = sqlalchemy.text(f"SET rls.{key} = {value};")
             stmts.append(stmt)
         return stmts
 
@@ -69,7 +69,7 @@ class RlsSession(Session):
             """
             self.session._rls_bypass = True
             # Disable row-level security
-            self.session.execute(text("SET LOCAL rls.bypass_rls = true;"))
+            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
             return self.session
 
         def __exit__(self, exc_type, exc_val, exc_tb):
@@ -82,7 +82,7 @@ class RlsSession(Session):
             if exc_type is not None:
                 self.session.rollback()
                 return
-            self.session.execute(text("SET LOCAL rls.bypass_rls = false;"))
+            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
         def execute(self, *args, **kwargs):
             return self.session.execute(*args, **kwargs)
