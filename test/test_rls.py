@@ -3,8 +3,7 @@ import unittest
 import sqlalchemy
 from sqlalchemy import orm
 
-from rls import rls_session
-from rls import rls_sessioner
+from rls import rls_session, rls_sessioner
 from test import database, models
 
 
@@ -107,12 +106,16 @@ class TestRLSPolicies(unittest.TestCase):
     def test_rls_query_with_rls_session_and_bypass(self):
         context = models.SampleRlsContext(account_id=1)
 
-        rls_sess = rls_session.RlsSession(context=context, bind=self.non_superadmin_engine)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
 
         with rls_sess.begin():
             # Test Policy on table users with SELECT where (id = account_id)
             my_user = (
-                rls_sess.execute(sqlalchemy.text("SELECT * FROM users;")).mappings().fetchall()
+                rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
+                .mappings()
+                .fetchall()
             )
             self.assertEqual(len(my_user), 1, "Expected 1 user to be returned.")
             self.assertEqual(my_user[0]["id"], 1, "Expected user id to be 1.")
@@ -141,7 +144,11 @@ class TestRLSPolicies(unittest.TestCase):
         )
 
         with my_sessioner(account_id=1) as session:
-            res = session.execute(sqlalchemy.text("SELECT * FROM users")).mappings().fetchall()
+            res = (
+                session.execute(sqlalchemy.text("SELECT * FROM users"))
+                .mappings()
+                .fetchall()
+            )
             self.assertEqual(len(res), 1, "Expected 1 user to be returned.")
             self.assertEqual(res[0]["id"], 1, "Expected user id to be 1.")
             self.assertEqual(

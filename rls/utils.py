@@ -48,7 +48,9 @@ def generate_rls_policy(
         raise ValueError(f'Unknown policy command"{cmd}"')
 
 
-def policy_changed_checker(db_policy: schemas.Policy, metadata_policy: schemas.Policy) -> bool:
+def policy_changed_checker(
+    db_policy: schemas.Policy, metadata_policy: schemas.Policy
+) -> bool:
     temp_metadata_policy = metadata_policy.model_copy()
     temp_metadata_policy.expression = add_bypass_rls_to_expr(metadata_policy.expression)
 

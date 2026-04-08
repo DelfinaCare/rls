@@ -2,11 +2,9 @@ import typing
 
 import pydantic
 import sqlalchemy
-from sqlalchemy import orm
-from sqlalchemy import sql
+from sqlalchemy import orm, sql
 
-from rls import register_rls
-from rls import schemas
+from rls import register_rls, schemas
 
 Base: typing.Any = register_rls.register_rls(orm.declarative_base())
 
@@ -20,7 +18,9 @@ class User(Base):
     __rls_policies__ = [
         schemas.Permissive(
             condition_args=[
-                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
             ],
             cmd=[schemas.Command.select, schemas.Command.update],
             custom_expr=lambda x: sql.column("id") == x,
@@ -35,14 +35,18 @@ class Item(Base):
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
     title = sqlalchemy.Column(sqlalchemy.String, index=True)
     description = sqlalchemy.Column(sqlalchemy.String)
-    owner_id = sqlalchemy.Column(sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id", ondelete="CASCADE"))
+    owner_id = sqlalchemy.Column(
+        sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id", ondelete="CASCADE")
+    )
 
     owner = orm.relationship("User")
 
     __rls_policies__ = [
         schemas.Permissive(
             condition_args=[
-                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
             ],
             cmd=[schemas.Command.select, schemas.Command.update],
             custom_expr=lambda x: sql.column("owner_id") == x,
@@ -50,7 +54,9 @@ class Item(Base):
         ),
         schemas.Permissive(
             condition_args=[
-                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
             ],
             cmd=[schemas.Command.select],
             custom_expr=lambda x: sql.column("owner_id") > x,
@@ -58,7 +64,9 @@ class Item(Base):
         ),
         schemas.Permissive(
             condition_args=[
-                schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
             ],
             cmd=[schemas.Command.all],
             custom_expr=lambda x: sql.column("owner_id") <= x,

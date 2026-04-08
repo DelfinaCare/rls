@@ -1,10 +1,10 @@
 import os
 import unittest
 
+import sqlalchemy
 import testing.postgresql
 from alembic import command
 from alembic import config as alembic_config
-import sqlalchemy
 
 
 class TestAlembicOperations(unittest.TestCase):
