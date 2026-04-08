@@ -1,6 +1,6 @@
 import unittest
 
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 from test import fastapi_sample
 
@@ -8,7 +8,7 @@ from test import fastapi_sample
 class FastapiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.client = TestClient(fastapi_sample.app)
+        cls.client = testclient.TestClient(fastapi_sample.app)
         cls.client.__enter__()
 
     @classmethod
