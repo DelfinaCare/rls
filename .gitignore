@@ -8,3 +8,4 @@ __pycache__
 *.whl
 _version.py
 .pytest_cache/
+test/alembic/versions/*.py

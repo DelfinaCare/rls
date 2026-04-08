@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 
 from fastapi import testclient
@@ -9,17 +8,12 @@ from test import fastapi_sample
 class FastapiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Manually run the lifespan async generator for the test database setup
-        loop = asyncio.get_event_loop()
-        cls.lifespan = loop.run_until_complete(
-            fastapi_sample.app.router.lifespan_context(fastapi_sample.app).__aenter__()
-        )
-
-        # Create a TestClient instance
         cls.client = testclient.TestClient(fastapi_sample.app)
+        cls.client.__enter__()
 
     @classmethod
     def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
         del cls.client
 
     def test_rls_query(self):
