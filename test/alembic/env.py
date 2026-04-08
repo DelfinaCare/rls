@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
+import sqlalchemy
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 
-from rls.alembic_rls import set_metadata_info
-from test.models import Base
+from rls import alembic_rls
+from test import models
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -22,7 +23,7 @@ if config.config_file_name is not None:
 
 
 # TODO: change meta_data_info name to rls_base_wrapper(base: declarative_base)
-target_metadata = set_metadata_info(Base).metadata
+target_metadata = alembic_rls.set_metadata_info(models.Base).metadata
 
 
 # other values from the config, defined by the needs of env.py,
@@ -62,7 +63,7 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    connectable = engine_from_config(
+    connectable = sqlalchemy.engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,

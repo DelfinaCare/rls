@@ -1,10 +1,10 @@
 import os
 import unittest
 
+import sqlalchemy
 import testing.postgresql
 from alembic import command
-from alembic.config import Config
-from sqlalchemy import create_engine, text
+from alembic import config as alembic_config
 
 
 class TestAlembicOperations(unittest.TestCase):
@@ -17,7 +17,7 @@ class TestAlembicOperations(unittest.TestCase):
         cls.engine_url = cls.postgresql.url()
 
         # Initialize Alembic configuration
-        cls.alembic_cfg = Config(
+        cls.alembic_cfg = alembic_config.Config(
             os.path.join(os.path.dirname(__file__), "./alembic.ini")
         )
         cls.alembic_cfg.set_main_option("sqlalchemy.url", cls.engine_url)
@@ -25,7 +25,7 @@ class TestAlembicOperations(unittest.TestCase):
             "script_location", os.path.join(os.path.dirname(__file__), "./alembic")
         )
 
-        cls.admin_engine = create_engine(cls.engine_url)
+        cls.admin_engine = sqlalchemy.create_engine(cls.engine_url)
         cls.connection = cls.admin_engine.connect()
 
     @classmethod
@@ -47,7 +47,7 @@ class TestAlembicOperations(unittest.TestCase):
             # Check if the policies are created
             policies = (
                 self.connection.execute(
-                    text(
+                    sqlalchemy.text(
                         """
                 SELECT policyname, permissive, qual, with_check, cmd
                 FROM pg_policies
