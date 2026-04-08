@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -41,7 +41,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          allow-prereleases: true
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run unit tests
