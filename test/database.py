@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 import testing.postgresql
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext import asyncio as sa_asyncio
 
 from test import models
 
@@ -14,6 +15,7 @@ class TestPostgres:
     postgresql: testing.postgresql.Postgresql
     admin_engine: sa.engine.Engine
     non_superadmin_engine: sa.engine.Engine
+    async_non_superadmin_engine: sa_asyncio.AsyncEngine
 
     def __del__(self):
         self.admin_engine.dispose()
@@ -65,6 +67,11 @@ def test_postgres_instance() -> TestPostgres:
 
     # Create the engine with the non-superadmin user's credentials
     inst.non_superadmin_engine = sa.create_engine(
+        psycopg3_url(
+            f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
+        )
+    )
+    inst.async_non_superadmin_engine = sa_asyncio.create_async_engine(
         psycopg3_url(
             f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
         )
