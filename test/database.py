@@ -19,7 +19,9 @@ def test_postgres_instance() -> TestPostgres:
     """Returns a test postgres instance seeded with data."""
     inst = TestPostgres()
     inst.postgresql = testing.postgresql.Postgresql()
-    inst.admin_engine = sa.create_engine(inst.postgresql.url())
+    inst.admin_engine = sa.create_engine(
+        inst.postgresql.url().replace("postgresql://", "postgresql+psycopg://", 1)
+    )
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
 
@@ -59,6 +61,6 @@ def test_postgres_instance() -> TestPostgres:
 
     # Create the engine with the non-superadmin user's credentials
     inst.non_superadmin_engine = sa.create_engine(
-        f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
+        f"postgresql+psycopg://{non_superadmin_user}:{password}@{host}:{port}/{database}"
     )
     return inst

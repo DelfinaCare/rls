@@ -14,7 +14,9 @@ class TestAlembicOperations(unittest.TestCase):
         cls.postgresql = testing.postgresql.PostgresqlFactory(
             cache_initialized_db=True
         )()
-        cls.engine_url = cls.postgresql.url()
+        cls.engine_url = cls.postgresql.url().replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
 
         # Initialize Alembic configuration
         cls.alembic_cfg = alembic_config.Config(
