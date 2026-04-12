@@ -123,9 +123,9 @@ target_metadata = Base.metadata
 call our rls base wrapper instead
 
 ```python
-from rls.alembic_rls import rls_base_wrapper
+from rls.alembic_rls import set_metadata_info
 
-target_metadata = rls_base_wrapper(Base).metadata
+target_metadata = set_metadata_info(Base).metadata
 ```
 
 which returns a base that its rls policies metadata set.
@@ -140,7 +140,7 @@ for more info on handling alembic and it's custom operations check our [alembic 
 
 now that we have created the policies how are we going to use it?
 
-we have a custom sqlalchemy session class called `RlsSession` that extends sqlaclhemy's `Session` which must be used or extended.
+we have a custom sqlalchemy session class called `RlsSession` that extends sqlalchemy's `Session` which must be used or extended.
 
 and you have to pass the context which the session variables values will be taken from which should extend a `pydantic Base Model` and bind an `engine` to it.
 
@@ -221,9 +221,9 @@ with  my_sessioner(account_id=11, provider_id=44) as session:
 
 #### Fastapi
 
-if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_app.py`](test/fastapi_app.py).
+if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_sample.py`](test/fastapi_sample.py).
 
 
 ---
-## LiCENSE
+## LICENSE
 [MIT](./LICENSE)
