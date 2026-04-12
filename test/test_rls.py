@@ -325,6 +325,17 @@ class TestRLSSessionBehavior(unittest.TestCase):
             )
         rls_sess.close()
 
+    def test_none_context_field_filters_results(self):
+        """A nullable pydantic field set to None prevents accessing any rows."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
+        with self.assertRaises(sqlalchemy.exc.DataError):
+            with rls_sess.begin():
+                rls_sess.execute(sqlalchemy.text("SELECT * FROM users")).fetchall()
+        rls_sess.close()
+
     def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)
