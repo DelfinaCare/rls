@@ -15,26 +15,30 @@ class _RlsSessionMixin:
         if context is not None:
             self.context = context
 
-    def _get_set_statements(self):
+    def _get_set_statement(self):
         """
-        Generates SQL SET statements based on the context model.
+        Generates a single SQL statement to set all RLS config values.
 
-        Uses set_config() with bound parameters to prevent SQL injection from
-        values passed through the context.
+        Combines all set_config() calls into one SELECT statement with bound
+        parameters to prevent SQL injection from values passed through the context.
         """
-        stmts = []
         if self.context is None or self._rls_bypass:  # Skip RLS statements if bypassed
             return None
 
-        for key, value in self.context.model_dump().items():
-            stmt = sqlalchemy.text(
-                "SELECT set_config(:setting, :value, false)"
-            ).bindparams(
-                setting=f"rls.{key}",
-                value=str(value) if value is not None else "",
-            )
-            stmts.append(stmt)
-        return stmts
+        items = list(self.context.model_dump().items())
+        if not items:
+            return None
+
+        parts = []
+        params = {}
+        for i, (key, value) in enumerate(items):
+            # parts only ever contains literal placeholder strings; user-supplied
+            # values are passed exclusively through bound parameters below.
+            parts.append(f"set_config(:setting_{i}, :value_{i}, false)")
+            params[f"setting_{i}"] = f"rls.{key}"
+            params[f"value_{i}"] = str(value) if value is not None else ""
+
+        return sqlalchemy.text(f"SELECT {', '.join(parts)}").bindparams(**params)
 
 
 class BypassRLSContext:
@@ -64,10 +68,9 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         if self._rls_bypass:  # Skip setting RLS when bypassing
             return
-        stmts = self._get_set_statements()
-        if stmts is not None:
-            for stmt in stmts:
-                super().execute(stmt)
+        stmt = self._get_set_statement()
+        if stmt is not None:
+            super().execute(stmt)
 
     def execute(self, *args, **kwargs):
         """
@@ -104,10 +107,9 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         if self._rls_bypass:  # Skip setting RLS when bypassing
             return
-        stmts = self._get_set_statements()
-        if stmts is not None:
-            for stmt in stmts:
-                await super().execute(stmt)
+        stmt = self._get_set_statement()
+        if stmt is not None:
+            await super().execute(stmt)
 
     async def execute(self, *args, **kwargs):
         """
