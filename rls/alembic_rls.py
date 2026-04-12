@@ -66,7 +66,7 @@ def enable_rls(operations, operation):
 @alembic_operations.Operations.implementation_for(DisableRlsOp)
 def disable_rls(operations, operation):
     if operation.schemaname is not None:
-        name = "%s.%s" % (operation.schemaname, operation.sequence_name)
+        name = "%s.%s" % (operation.schemaname, operation.tablename)
     else:
         name = operation.tablename
     operations.execute("ALTER TABLE %s DISABLE ROW LEVEL SECURITY" % name)
