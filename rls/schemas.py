@@ -72,7 +72,7 @@ class Policy(pydantic.BaseModel):
         lambda_args_length = len(inspect.signature(self.custom_expr).parameters)
         if condition_args_length != lambda_args_length:
             raise ValueError(
-                f"Length mismatch for arguments. Expected {condition_args_length}, got {lamda_args_length}"
+                f"Length mismatch for arguments. Expected {condition_args_length}, got {lambda_args_length}"
             )
         return True
 
