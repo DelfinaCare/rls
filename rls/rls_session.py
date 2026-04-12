@@ -36,12 +36,6 @@ class _RlsSessionMixin:
             stmts.append(stmt)
         return stmts
 
-    def get_context(self):
-        return self.context
-
-    def set_context(self, context):
-        self.context = context
-
 
 class RlsSession(_RlsSessionMixin, orm.Session):
     def _execute_set_statements(self):
