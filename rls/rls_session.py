@@ -6,7 +6,9 @@ from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 
-class RlsSession(orm.Session):
+class _RlsSessionMixin:
+    """Shared logic for RlsSession and AsyncRlsSession."""
+
     def __init__(self, context: Optional[pydantic.BaseModel] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass = False  # Track RLS bypass state
@@ -16,7 +18,8 @@ class RlsSession(orm.Session):
     def bypass_rls(self):
         """
         Context manager to bypass RLS.
-        Usage: with session.bypass_rls() as session:
+        Usage (sync):  with session.bypass_rls() as session:
+        Usage (async): async with session.bypass_rls() as session:
         """
         return self.BypassRLSContext(self)
 
@@ -33,6 +36,14 @@ class RlsSession(orm.Session):
             stmts.append(stmt)
         return stmts
 
+    def get_context(self):
+        return self.context
+
+    def set_context(self, context):
+        self.context = context
+
+
+class RlsSession(_RlsSessionMixin, orm.Session):
     def _execute_set_statements(self):
         """
         Executes the RLS SET statements unless bypassing RLS.
@@ -43,12 +54,6 @@ class RlsSession(orm.Session):
         if stmts is not None:
             for stmt in stmts:
                 super().execute(stmt)
-
-    def get_context(self):
-        return self.context
-
-    def set_context(self, context):
-        self.context = context
 
     def execute(self, *args, **kwargs):
         """
@@ -89,33 +94,7 @@ class RlsSession(orm.Session):
             return self.session.execute(*args, **kwargs)
 
 
-class AsyncRlsSession(sa_asyncio.AsyncSession):
-    def __init__(self, context: Optional[pydantic.BaseModel] = None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._rls_bypass = False  # Track RLS bypass state
-        if context is not None:
-            self.context = context
-
-    def bypass_rls(self):
-        """
-        Async context manager to bypass RLS.
-        Usage: async with session.bypass_rls() as session:
-        """
-        return self.AsyncBypassRLSContext(self)
-
-    def _get_set_statements(self):
-        """
-        Generates SQL SET statements based on the context model.
-        """
-        stmts = []
-        if self.context is None or self._rls_bypass:  # Skip RLS statements if bypassed
-            return None
-
-        for key, value in self.context.model_dump().items():
-            stmt = sqlalchemy.text(f"SET rls.{key} = {value};")
-            stmts.append(stmt)
-        return stmts
-
+class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):
         """
         Executes the RLS SET statements unless bypassing RLS.
@@ -127,12 +106,6 @@ class AsyncRlsSession(sa_asyncio.AsyncSession):
             for stmt in stmts:
                 await super().execute(stmt)
 
-    def get_context(self):
-        return self.context
-
-    def set_context(self, context):
-        self.context = context
-
     async def execute(self, *args, **kwargs):
         """
         Executes SQL queries, applying RLS unless bypassing.
@@ -140,7 +113,7 @@ class AsyncRlsSession(sa_asyncio.AsyncSession):
         await self._execute_set_statements()
         return await super().execute(*args, **kwargs)
 
-    class AsyncBypassRLSContext:
+    class BypassRLSContext:
         def __init__(self, session: "AsyncRlsSession"):
             self.session = session
 
