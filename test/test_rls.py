@@ -310,6 +310,21 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess1.close()
         rls_sess2.close()
 
+    def test_none_context_field_clears_rls_setting(self):
+        """A nullable pydantic field set to None clears the corresponding RLS pg setting."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
+        with rls_sess.begin():
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertIn(
+                setting,
+                {"", None},
+                "RLS setting for a None context field must be empty or unset.",
+            )
+        rls_sess.close()
+
     def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)
