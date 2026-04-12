@@ -147,17 +147,17 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         await rls_sess.close()
 
     async def test_none_context_field_clears_rls_setting(self):
-        """A nullable pydantic field set to None clears the corresponding RLS pg setting."""
+        """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
         context = models.SampleRlsContext(account_id=None)
         rls_sess = rls_session.AsyncRlsSession(
             context=context, bind=self.instance.async_non_superadmin_engine
         )
         async with rls_sess.begin():
             setting = await get_pg_rls_setting(rls_sess, "account_id")
-            self.assertIn(
+            self.assertEqual(
                 setting,
-                {"", None},
-                "RLS setting for a None context field must be empty or unset.",
+                "",
+                "RLS setting for a None context field must be reset to empty string.",
             )
         await rls_sess.close()
 
