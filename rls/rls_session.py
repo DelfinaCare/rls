@@ -15,14 +15,6 @@ class _RlsSessionMixin:
         if context is not None:
             self.context = context
 
-    def bypass_rls(self):
-        """
-        Context manager to bypass RLS.
-        Usage (sync):  with session.bypass_rls() as session:
-        Usage (async): async with session.bypass_rls() as session:
-        """
-        return self.BypassRLSContext(self)
-
     def _get_set_statements(self):
         """
         Generates SQL SET statements based on the context model.
@@ -35,6 +27,26 @@ class _RlsSessionMixin:
             stmt = sqlalchemy.text(f"SET rls.{key} = {value};")
             stmts.append(stmt)
         return stmts
+
+
+class BypassRLSContext:
+    def __init__(self, session: "RlsSession"):
+        self.session = session
+
+    def __enter__(self):
+        self.session._rls_bypass = True
+        self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+        return self.session
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.session._rls_bypass = False
+        if exc_type is not None:
+            self.session.rollback()
+            return
+        self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
+
+    def execute(self, *args, **kwargs):
+        return self.session.execute(*args, **kwargs)
 
 
 class RlsSession(_RlsSessionMixin, orm.Session):
@@ -56,36 +68,25 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         self._execute_set_statements()
         return super().execute(*args, **kwargs)
 
-    # Inner class for the context manager
-    # Updated BypassRLSContext to handle errors
-    class BypassRLSContext:
-        def __init__(self, session: "RlsSession"):
-            self.session = session
+    def bypass_rls(self) -> BypassRLSContext:
+        return BypassRLSContext(self)
 
-        def __enter__(self):
-            """
-            When entering the context, attempt to bypass RLS.
-            If the command fails, rollback the transaction.
-            """
-            self.session._rls_bypass = True
-            # Disable row-level security
-            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
-            return self.session
 
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            """
-            When exiting the context, restore RLS if it was successfully disabled.
-            """
-            self.session._rls_bypass = False
+class AsyncBypassRLSContext:
+    def __init__(self, session: "AsyncRlsSession"):
+        self.session = session
 
-            # If the transaction failed, skip re-enabling RLS
-            if exc_type is not None:
-                self.session.rollback()
-                return
-            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
+    async def __aenter__(self):
+        self.session._rls_bypass = True
+        await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+        return self.session
 
-        def execute(self, *args, **kwargs):
-            return self.session.execute(*args, **kwargs)
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.session._rls_bypass = False
+        if exc_type is not None:
+            await self.session.rollback()
+            return
+        await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
@@ -107,31 +108,5 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         await self._execute_set_statements()
         return await super().execute(*args, **kwargs)
 
-    class BypassRLSContext:
-        def __init__(self, session: "AsyncRlsSession"):
-            self.session = session
-
-        async def __aenter__(self):
-            """
-            When entering the context, attempt to bypass RLS.
-            """
-            self.session._rls_bypass = True
-            # Disable row-level security
-            await self.session.execute(
-                sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
-            )
-            return self.session
-
-        async def __aexit__(self, exc_type, exc_val, exc_tb):
-            """
-            When exiting the context, restore RLS if it was successfully disabled.
-            """
-            self.session._rls_bypass = False
-
-            # If the transaction failed, skip re-enabling RLS
-            if exc_type is not None:
-                await self.session.rollback()
-                return
-            await self.session.execute(
-                sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
-            )
+    def bypass_rls(self) -> AsyncBypassRLSContext:
+        return AsyncBypassRLSContext(self)
