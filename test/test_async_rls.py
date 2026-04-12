@@ -162,14 +162,15 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         await rls_sess.close()
 
     async def test_none_context_field_filters_results(self):
-        """A nullable pydantic field set to None prevents accessing any rows."""
+        """A nullable pydantic field set to None returns no rows."""
         context = models.SampleRlsContext(account_id=None)
         rls_sess = rls_session.AsyncRlsSession(
             context=context, bind=self.instance.async_non_superadmin_engine
         )
-        with self.assertRaises(sqlalchemy.exc.DataError):
-            async with rls_sess.begin():
-                await rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+        async with rls_sess.begin():
+            result = await rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            rows = result.fetchall()
+            self.assertEqual(len(rows), 0, "Expected no rows when account_id is None.")
         await rls_sess.close()
 
     async def test_different_contexts_see_different_data(self):
