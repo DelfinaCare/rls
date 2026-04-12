@@ -1,11 +1,14 @@
 import unittest
 
+import pydantic
 import sqlalchemy
 import sqlalchemy.exc
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import rls_session
 from test import database, models
+
+_MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 
 
 async def get_pg_rls_setting(
@@ -165,6 +168,58 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result2[0]["id"], 2)
         await rls_sess1.close()
         await rls_sess2.close()
+
+
+class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+
+    @classmethod
+    def tearDownClass(cls):
+        del cls.instance
+
+    async def test_malicious_context_value_does_not_execute_sql_injection(self):
+        """A malicious string value in the async context is treated as a literal
+        string and does not allow SQL injection through the RLS session variables."""
+
+        class StringContext(pydantic.BaseModel):
+            account_id: str
+
+        context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
+        rls_sess = rls_session.AsyncRlsSession(
+            context=context, bind=self.instance.async_non_superadmin_engine
+        )
+
+        async with rls_sess.begin():
+            await rls_sess.execute(sqlalchemy.text("SELECT 1"))
+
+            # Verify the malicious payload was stored as a literal string, not executed
+            result = await rls_sess.execute(
+                sqlalchemy.text(
+                    "SELECT current_setting('rls.account_id', true);"
+                )
+            )
+            stored_value = result.scalar()
+            self.assertEqual(
+                stored_value,
+                _MALICIOUS_CONTEXT_VALUE,
+                "Context value must be stored as a literal string, not interpreted as SQL.",
+            )
+
+        # Verify the schema and its tables still exist (DROP SCHEMA was not executed)
+        async with self.instance.async_non_superadmin_engine.connect() as conn:
+            result = await conn.execute(
+                sqlalchemy.text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"
+                )
+            )
+            tables = result.fetchall()
+            self.assertGreater(
+                len(tables),
+                0,
+                "Public schema tables must still exist after a context with a malicious value.",
+            )
 
 
 if __name__ == "__main__":
