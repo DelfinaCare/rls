@@ -6,6 +6,8 @@ import testing.postgresql
 from alembic import command
 from alembic import config as alembic_config
 
+from test.database import psycopg3_url
+
 
 class TestAlembicOperations(unittest.TestCase):
     @classmethod
@@ -14,9 +16,7 @@ class TestAlembicOperations(unittest.TestCase):
         cls.postgresql = testing.postgresql.PostgresqlFactory(
             cache_initialized_db=True
         )()
-        cls.engine_url = cls.postgresql.url().replace(
-            "postgresql://", "postgresql+psycopg://", 1
-        )
+        cls.engine_url = psycopg3_url(cls.postgresql.url())
 
         # Initialize Alembic configuration
         cls.alembic_cfg = alembic_config.Config(

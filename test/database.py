@@ -1,7 +1,13 @@
 import sqlalchemy as sa
 import testing.postgresql
+from sqlalchemy.engine import make_url
 
 from test import models
+
+
+def psycopg3_url(url: str) -> str:
+    """Convert a postgresql:// URL to use the psycopg3 dialect."""
+    return str(make_url(url).set(drivername="postgresql+psycopg"))
 
 
 class TestPostgres:
@@ -19,9 +25,7 @@ def test_postgres_instance() -> TestPostgres:
     """Returns a test postgres instance seeded with data."""
     inst = TestPostgres()
     inst.postgresql = testing.postgresql.Postgresql()
-    inst.admin_engine = sa.create_engine(
-        inst.postgresql.url().replace("postgresql://", "postgresql+psycopg://", 1)
-    )
+    inst.admin_engine = sa.create_engine(psycopg3_url(inst.postgresql.url()))
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
 
@@ -61,6 +65,8 @@ def test_postgres_instance() -> TestPostgres:
 
     # Create the engine with the non-superadmin user's credentials
     inst.non_superadmin_engine = sa.create_engine(
-        f"postgresql+psycopg://{non_superadmin_user}:{password}@{host}:{port}/{database}"
+        psycopg3_url(
+            f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
+        )
     )
     return inst
