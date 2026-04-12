@@ -362,9 +362,7 @@ class TestSQLInjectionProtection(unittest.TestCase):
 
             # Verify the malicious payload was stored as a literal string, not executed
             stored_value = rls_sess.execute(
-                sqlalchemy.text(
-                    "SELECT current_setting('rls.account_id', true);"
-                )
+                sqlalchemy.text("SELECT current_setting('rls.account_id', true);")
             ).scalar()
             self.assertEqual(
                 stored_value,

@@ -196,9 +196,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
 
             # Verify the malicious payload was stored as a literal string, not executed
             result = await rls_sess.execute(
-                sqlalchemy.text(
-                    "SELECT current_setting('rls.account_id', true);"
-                )
+                sqlalchemy.text("SELECT current_setting('rls.account_id', true);")
             )
             stored_value = result.scalar()
             self.assertEqual(
