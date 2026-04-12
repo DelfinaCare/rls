@@ -1,11 +1,14 @@
 import unittest
 
+import pydantic
 import sqlalchemy
 import sqlalchemy.exc
 from sqlalchemy import orm
 
 from rls import rls_session, rls_sessioner
 from test import database, models
+
+_MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 
 
 def get_pg_rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
@@ -329,6 +332,56 @@ class TestRLSSessionBehavior(unittest.TestCase):
                 self.assertEqual(result2[0]["id"], 2)
         rls_sess1.close()
         rls_sess2.close()
+
+
+class TestSQLInjectionProtection(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        cls.admin_engine = cls.instance.admin_engine
+        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
+
+    @classmethod
+    def tearDownClass(cls):
+        del cls.instance
+
+    def test_malicious_context_value_does_not_execute_sql_injection(self):
+        """A malicious string value in the context is treated as a literal string
+        and does not allow SQL injection through the RLS session variables."""
+
+        class StringContext(pydantic.BaseModel):
+            account_id: str
+
+        context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
+
+        with rls_sess.begin():
+            rls_sess.execute(sqlalchemy.text("SELECT 1"))
+
+            # Verify the malicious payload was stored as a literal string, not executed
+            stored_value = rls_sess.execute(
+                sqlalchemy.text("SELECT current_setting('rls.account_id', true);")
+            ).scalar()
+            self.assertEqual(
+                stored_value,
+                _MALICIOUS_CONTEXT_VALUE,
+                "Context value must be stored as a literal string, not interpreted as SQL.",
+            )
+
+        # Verify the schema and its tables still exist (DROP SCHEMA was not executed)
+        with self.admin_engine.connect() as conn:
+            tables = conn.execute(
+                sqlalchemy.text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"
+                )
+            ).fetchall()
+            self.assertGreater(
+                len(tables),
+                0,
+                "Public schema tables must still exist after a context with a malicious value.",
+            )
 
 
 if __name__ == "__main__":

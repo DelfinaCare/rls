@@ -18,13 +18,21 @@ class _RlsSessionMixin:
     def _get_set_statements(self):
         """
         Generates SQL SET statements based on the context model.
+
+        Uses set_config() with bound parameters to prevent SQL injection from
+        values passed through the context.
         """
         stmts = []
         if self.context is None or self._rls_bypass:  # Skip RLS statements if bypassed
             return None
 
         for key, value in self.context.model_dump().items():
-            stmt = sqlalchemy.text(f"SET rls.{key} = {value};")
+            stmt = sqlalchemy.text(
+                "SELECT set_config(:setting, :value, false)"
+            ).bindparams(
+                setting=f"rls.{key}",
+                value=str(value) if value is not None else "",
+            )
             stmts.append(stmt)
         return stmts
 
