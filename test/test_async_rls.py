@@ -6,7 +6,8 @@ import sqlalchemy.exc
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import rls_session
-from test import database, models
+from test import database
+from test import models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 

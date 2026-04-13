@@ -6,7 +6,8 @@ import testing.postgresql
 from alembic import command
 from alembic import config as alembic_config
 
-from test import database, expectations
+from test import database
+from test import expectations
 
 
 class TestAlembicOperations(unittest.TestCase):

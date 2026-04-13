@@ -6,7 +6,8 @@ from alembic import operations as alembic_operations
 from sqlalchemy.dialects import postgresql as pg_dialect
 from sqlalchemy.ext import declarative
 
-from . import schemas, utils
+from . import schemas
+from . import utils
 
 ############################
 # OPERATIONS

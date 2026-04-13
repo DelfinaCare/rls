@@ -2,9 +2,11 @@ import typing
 
 import pydantic
 import sqlalchemy
-from sqlalchemy import orm, sql
+from sqlalchemy import orm
+from sqlalchemy import sql
 
-from rls import register_rls, schemas
+from rls import register_rls
+from rls import schemas
 
 Base: typing.Any = register_rls.register_rls(orm.declarative_base())
 

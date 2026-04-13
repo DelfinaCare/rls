@@ -1,6 +1,11 @@
 import inspect
 from enum import Enum
-from typing import Callable, List, Literal, Optional, Type, Union
+from typing import Callable
+from typing import List
+from typing import Literal
+from typing import Optional
+from typing import Type
+from typing import Union
 
 import pydantic
 import sqlalchemy

@@ -4,8 +4,10 @@ import fastapi
 import sqlalchemy as sa
 import starlette.requests
 
-from rls import rls_session, rls_sessioner
-from test import database, models
+from rls import rls_session
+from rls import rls_sessioner
+from test import database
+from test import models
 
 
 class SampleContextGetter(rls_sessioner.ContextGetter):
