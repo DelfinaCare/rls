@@ -122,6 +122,20 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         self._execute_set_statements()
         return super().execute(*args, **kwargs)
 
+    def scalar(self, *args, **kwargs):
+        """
+        Executes a statement and returns a scalar result, applying RLS unless bypassing.
+        """
+        self._execute_set_statements()
+        return super().scalar(*args, **kwargs)
+
+    def scalars(self, *args, **kwargs):
+        """
+        Executes a statement and returns scalar results, applying RLS unless bypassing.
+        """
+        self._execute_set_statements()
+        return super().scalars(*args, **kwargs)
+
     def commit(self):
         super().commit()
         if self._rls_bypass:
@@ -180,6 +194,20 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         await self._execute_set_statements()
         return await super().execute(*args, **kwargs)
+
+    async def scalar(self, *args, **kwargs):
+        """
+        Executes a statement and returns a scalar result, applying RLS unless bypassing.
+        """
+        await self._execute_set_statements()
+        return await super().scalar(*args, **kwargs)
+
+    async def scalars(self, *args, **kwargs):
+        """
+        Executes a statement and returns scalar results, applying RLS unless bypassing.
+        """
+        await self._execute_set_statements()
+        return await super().scalars(*args, **kwargs)
 
     async def commit(self):
         await super().commit()

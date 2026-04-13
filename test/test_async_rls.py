@@ -239,6 +239,139 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         await rls_sess1.close()
         await rls_sess2.close()
 
+    async def test_begin_sets_rls_account_id_setting(self):
+        """begin() sets the rls.account_id pg setting to the context value."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+        await rls_sess.close()
+
+    async def test_scalar_sets_rls_settings(self):
+        """scalar() applies RLS and returns only the account's user id."""
+        rls_sess = self._new_session(account_id=1)
+        result = await rls_sess.scalar(
+            sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
+        )
+        self.assertEqual(result, 1)
+        await rls_sess.close()
+
+    async def test_scalars_sets_rls_settings(self):
+        """scalars() applies RLS and returns only the account's user id."""
+        rls_sess = self._new_session(account_id=1)
+        result = list(
+            await rls_sess.scalars(
+                sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
+            )
+        )
+        self.assertEqual(result, [1])
+        await rls_sess.close()
+
+    async def test_flush_preserves_rls_settings(self):
+        """flush() does not disrupt the rls.account_id setting established by begin()."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            await rls_sess.flush()
+            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        await rls_sess.close()
+
+
+class TestAsyncRLSWithOrmModels(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.instance.close()
+
+    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
+        return rls_session.AsyncRlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.instance.async_non_superadmin_engine,
+        )
+
+    async def test_begin_sets_rls_with_user_orm(self):
+        """begin() sets rls.account_id and ORM User query returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            users = list(
+                await rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users], [1])
+        await rls_sess.close()
+
+    async def test_scalar_with_user_orm_applies_rls(self):
+        """scalar() with User ORM model returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        user = await rls_sess.scalar(
+            sqlalchemy.select(models.User).order_by(models.User.id)
+        )
+        self.assertIsNotNone(user)
+        self.assertEqual(user.id, 1)
+        await rls_sess.close()
+
+    async def test_scalar_with_user_orm_hides_other_account(self):
+        """scalar() with User ORM model does not return a user from another account."""
+        rls_sess = self._new_session(account_id=1)
+        user = await rls_sess.scalar(
+            sqlalchemy.select(models.User).where(models.User.id == 2)
+        )
+        self.assertIsNone(user)
+        await rls_sess.close()
+
+    async def test_scalars_with_user_orm_applies_rls(self):
+        """scalars() with User ORM model returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        users = list(
+            await rls_sess.scalars(
+                sqlalchemy.select(models.User).order_by(models.User.id)
+            )
+        )
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0].id, 1)
+        await rls_sess.close()
+
+    async def test_scalars_with_user_orm_different_account(self):
+        """scalars() with User ORM model returns only the correct account's user."""
+        rls_sess = self._new_session(account_id=2)
+        users = list(
+            await rls_sess.scalars(
+                sqlalchemy.select(models.User).order_by(models.User.id)
+            )
+        )
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0].id, 2)
+        await rls_sess.close()
+
+    async def test_flush_with_user_orm_preserves_rls(self):
+        """flush() after loading User ORM objects preserves RLS filtering."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            users = list(
+                await rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users], [1])
+            await rls_sess.flush()
+            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            users_after_flush = list(
+                await rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users_after_flush], [1])
+        await rls_sess.close()
+
 
 class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
     @classmethod
