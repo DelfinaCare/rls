@@ -22,7 +22,7 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: wheel
-        path: ./*.whl
+        path: ./rls*.whl
 
   upload_wheel_test:
     needs: [build_wheel]
