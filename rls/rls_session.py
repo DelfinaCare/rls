@@ -1,5 +1,3 @@
-from typing import Optional
-
 import pydantic
 import sqlalchemy
 from sqlalchemy import orm
@@ -9,10 +7,10 @@ from sqlalchemy.ext import asyncio as sa_asyncio
 class _RlsSessionMixin:
     """Shared logic for RlsSession and AsyncRlsSession."""
 
-    def __init__(self, context: Optional[pydantic.BaseModel] = None, *args, **kwargs):
+    def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass = False  # Track RLS bypass state
-        self._rls_set_template: Optional[sqlalchemy.Select] = None
+        self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         if context is not None:
             self.context = context
