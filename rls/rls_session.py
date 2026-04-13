@@ -1,3 +1,5 @@
+import contextlib
+
 import pydantic
 import sqlalchemy
 from sqlalchemy import orm
@@ -107,6 +109,12 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         for stmt in self._get_set_statements():
             super().execute(stmt)
 
+    @contextlib.contextmanager
+    def begin(self):
+        with super().begin():
+            self._execute_set_statements()
+            yield self
+
     def execute(self, *args, **kwargs):
         """
         Executes SQL queries, applying RLS unless bypassing.
@@ -159,6 +167,12 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             return
         for stmt in self._get_set_statements():
             await super().execute(stmt)
+
+    @contextlib.asynccontextmanager
+    async def begin(self):
+        async with super().begin():
+            await self._execute_set_statements()
+            yield self
 
     async def execute(self, *args, **kwargs):
         """
