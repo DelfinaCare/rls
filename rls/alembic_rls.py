@@ -141,7 +141,7 @@ def check_table_exists(conn, schemaname, tablename) -> bool:
 
 
 def check_rls_enabled(conn, schemaname, tablename) -> bool:
-    fq_tablename = sa.literal(f"{schemaname}.tablename" if schemaname else tablename)
+    fq_tablename = sa.literal(f"{schemaname}.{tablename}" if schemaname else tablename)
     result = conn.execute(
         sa.select(sa.column("relrowsecurity"))
         .select_from(sa.table("pg_class"))
@@ -184,8 +184,10 @@ def compare_table_level(
         modify_ops.ops.append(DisableRlsOp(tablename=tablename, schemaname=schemaname))
 
     # STEP 5. Compare and manage individual policies (add, remove, update)
+    all_metadata_policy_names = []
     for idx, policy_meta in enumerate(rls_policies_meta):
         policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
+        all_metadata_policy_names.extend(policy_meta.policy_names)
         policy_expr = policy_meta.expression
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
             current_cmd = ""
@@ -247,12 +249,6 @@ def compare_table_level(
                             expr=policy_expr,
                         )
                     )
-
-    # Step 5.5 : Get all policy meta names
-    all_metadata_policy_names = []
-    for policy_meta in rls_policies_meta:
-        policy_meta.get_sql_policies(table_name=tablename)
-        all_metadata_policy_names.extend(policy_meta.policy_names)
 
     # Step 6. Check if there are any policies in the database that are not in the metadata
     for policy_db in rls_policies_db:

@@ -1,9 +1,11 @@
 import abc
+import contextlib
 from typing import Any, Optional
 
 import fastapi
 import pydantic
 from sqlalchemy import orm
+from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import rls_session
 
@@ -25,25 +27,54 @@ class RlsSessioner:
         self.session_maker: orm.sessionmaker[rls_session.RlsSession] = sessionmaker
         self.context_getter: ContextGetter = context_getter
 
-    def __call__(
-        self, *args: Optional[Any], **kwargs: Optional[Any]
-    ):  # Get context from the context getter
+    @contextlib.contextmanager
+    def __call__(self, *args: Optional[Any], **kwargs: Optional[Any]):
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:
-            return session
-        except Exception as e:
+            yield session
+        except Exception:
             session.rollback()
-            raise e
+            raise
         finally:
             session.close()
+
+
+class AsyncRlsSessioner:
+    def __init__(
+        self,
+        sessionmaker: sa_asyncio.async_sessionmaker,
+        context_getter: ContextGetter,
+    ):
+        if not issubclass(sessionmaker.class_, rls_session.AsyncRlsSession):
+            raise ValueError(
+                "sessionmaker class must be AsyncRlsSession or a subclass of AsyncRlsSession"
+            )
+
+        self.session_maker: sa_asyncio.async_sessionmaker[
+            rls_session.AsyncRlsSession
+        ] = sessionmaker
+        self.context_getter: ContextGetter = context_getter
+
+    @contextlib.asynccontextmanager
+    async def __call__(self, *args: Optional[Any], **kwargs: Optional[Any]):
+        context = self.context_getter.get_context(*args, **kwargs)
+        session = self.session_maker(context=context)
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
 # For Fastapi
 
 
-def fastapi_dependency_function(RlsSessioner: RlsSessioner):
+def fastapi_dependency_function(sessioner: RlsSessioner):
     def dependency_function(request: fastapi.Request):
-        return RlsSessioner(request=request)
+        with sessioner(request=request) as session:
+            yield session
 
     return dependency_function

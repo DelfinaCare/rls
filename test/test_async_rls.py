@@ -28,7 +28,7 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     def _async_engine(self) -> sa_asyncio.AsyncEngine:
         return self.instance.async_non_superadmin_engine
@@ -66,7 +66,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
         return rls_session.AsyncRlsSession(
@@ -196,6 +196,65 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         await rls_sess1.close()
         await rls_sess2.close()
 
+    async def test_multiple_sessions_bypass_isolated(self):
+        """Bypassing RLS on one async session does not affect a concurrent session."""
+        rls_sess1 = self._new_session(account_id=1)
+        rls_sess2 = self._new_session(account_id=2)
+        async with rls_sess1.begin():
+            async with rls_sess2.begin():
+                # Without bypass each session sees only its own user
+                result1 = (
+                    (await rls_sess1.execute(sqlalchemy.text("SELECT * FROM users")))
+                    .mappings()
+                    .fetchall()
+                )
+                result2 = (
+                    (await rls_sess2.execute(sqlalchemy.text("SELECT * FROM users")))
+                    .mappings()
+                    .fetchall()
+                )
+                self.assertEqual(len(result1), 1)
+                self.assertEqual(len(result2), 1)
+
+                # Bypass session1 only
+                async with rls_sess1.bypass_rls():
+                    result1_bypass = (
+                        (
+                            await rls_sess1.execute(
+                                sqlalchemy.text("SELECT * FROM users")
+                            )
+                        )
+                        .mappings()
+                        .fetchall()
+                    )
+                    result2_no_bypass = (
+                        (
+                            await rls_sess2.execute(
+                                sqlalchemy.text("SELECT * FROM users")
+                            )
+                        )
+                        .mappings()
+                        .fetchall()
+                    )
+                    self.assertEqual(
+                        len(result1_bypass), 2, "Bypassed session should see all users."
+                    )
+                    self.assertEqual(
+                        len(result2_no_bypass),
+                        1,
+                        "Non-bypassed session should see only its account's user.",
+                    )
+
+                # After bypass exits, session1 is restricted again
+                result1_after = (
+                    (await rls_sess1.execute(sqlalchemy.text("SELECT * FROM users")))
+                    .mappings()
+                    .fetchall()
+                )
+                self.assertEqual(len(result1_after), 1)
+        await rls_sess1.close()
+        await rls_sess2.close()
+
 
 class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -204,7 +263,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     async def test_malicious_context_value_does_not_execute_sql_injection(self):
         """A malicious string value in the async context is treated as a literal

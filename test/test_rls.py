@@ -6,7 +6,7 @@ import sqlalchemy.exc
 from sqlalchemy import orm
 
 from rls import rls_session, rls_sessioner
-from test import database, models
+from test import database, expectations, models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 
@@ -33,7 +33,7 @@ class TestRLSPolicies(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     def test_policy_creation(self):
         # Check that RLS policies exist in the database
@@ -56,47 +56,8 @@ class TestRLSPolicies(unittest.TestCase):
                 6,
                 "Expected 6 RLS policies to be applied to users and items tables.",
             )
-            expected_policies = [
-                {
-                    "policyname": "items_smaller_than_or_equal_accountid_policy_all_policy_2",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "ALL",
-                    "qual": "((owner_id <= (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-                {
-                    "policyname": "items_greater_than_accountid_policy_select_policy_1",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "SELECT",
-                    "qual": "((owner_id > (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-                {
-                    "policyname": "items_equal_to_accountid_policy_update_policy_0",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "UPDATE",
-                    "qual": "((owner_id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-                {
-                    "policyname": "items_equal_to_accountid_policy_select_policy_0",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "SELECT",
-                    "qual": "((owner_id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-                {
-                    "policyname": "users_equal_to_accountid_policy_update_policy_0",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "UPDATE",
-                    "qual": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                    "with_check": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-                {
-                    "policyname": "users_equal_to_accountid_policy_select_policy_0",
-                    "permissive": "PERMISSIVE",
-                    "cmd": "SELECT",
-                    "qual": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                },
-            ]
 
-            for policy in expected_policies:
+            for policy in expectations.EXPECTED_POLICIES:
                 matched_policy = next(
                     (p for p in policies if p["policyname"] == policy["policyname"]),
                     None,
@@ -179,7 +140,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
         return rls_session.RlsSession(
@@ -369,7 +330,7 @@ class TestSQLInjectionProtection(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        del cls.instance
+        cls.instance.close()
 
     def test_malicious_context_value_does_not_execute_sql_injection(self):
         """A malicious string value in the context is treated as a literal string

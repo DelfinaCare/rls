@@ -17,9 +17,10 @@ class TestPostgres:
     non_superadmin_engine: sa.engine.Engine
     async_non_superadmin_engine: sa_asyncio.AsyncEngine
 
-    def __del__(self):
+    def close(self):
         self.admin_engine.dispose()
         self.non_superadmin_engine.dispose()
+        self.async_non_superadmin_engine.sync_engine.dispose()
         self.postgresql.stop()
 
 
