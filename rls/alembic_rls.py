@@ -92,6 +92,7 @@ class RLSOp(typing.Protocol):
     def create_policy(
         self,
         table_name: str,
+        policy_name: str,
         definition: str,
         cmd: str,
         expr: str,
