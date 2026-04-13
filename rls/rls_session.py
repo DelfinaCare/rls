@@ -126,7 +126,9 @@ class AsyncBypassRLSContext:
         self._is_outermost = self.session._rls_bypass_depth == 0
         self.session._rls_bypass_depth += 1
         if self._is_outermost:
-            await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+            await self.session.execute(
+                sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
+            )
         return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -137,7 +139,9 @@ class AsyncBypassRLSContext:
                 await self.session.rollback()
             return
         if self._is_outermost:
-            await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
+            await self.session.execute(
+                sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
+            )
 
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
