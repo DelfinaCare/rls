@@ -23,3 +23,18 @@ from module.submodule import MyObject
 
 MyObject()
 ```
+
+Use one import per line. Do **not** import multiple names in a single `from … import` statement.
+
+**Do:**
+
+```python
+from module import submodule_a
+from module import submodule_b
+```
+
+**Don't:**
+
+```python
+from module import submodule_a, submodule_b
+```
