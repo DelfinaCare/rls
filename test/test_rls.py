@@ -139,7 +139,6 @@ class TestRLSSessionBehavior(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.instance = database.test_postgres_instance()
-        cls.admin_engine = cls.instance.admin_engine
         cls.non_superadmin_engine = cls.instance.non_superadmin_engine
 
     @classmethod
@@ -365,7 +364,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
 
     def test_bypass_rls_persists_across_commit(self):
         """bypass_rls state persists across commit within the bypass context."""
-        rls_sess = rls_session.RlsSession(bind=self.admin_engine)
+        rls_sess = self._new_session()
         with rls_sess.bypass_rls():
             self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
             rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
