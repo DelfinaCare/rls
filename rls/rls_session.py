@@ -17,12 +17,13 @@ class _RlsSessionMixin:
 
     def _get_set_statements(self):
         """
-        Generates SQL statements to set all RLS config values.
+        Generates a single SQL statement to set all RLS config values.
 
-        Non-None values are combined into a single SELECT set_config() statement
-        with bound parameters to prevent SQL injection.  None values emit a RESET
-        statement for their GUC, so current_setting(key, true) returns NULL and the
-        RLS policy expression evaluates to NULL (i.e. no rows are returned).
+        All keys — including those with a None value — are combined into one
+        SELECT set_config() call with bound parameters to prevent SQL injection.
+        None values are stored as an empty string; the RLS policy expressions wrap
+        current_setting() with NULLIF(..., ''), so an empty string becomes NULL and
+        the policy filters out all rows.
         """
         if self.context is None or self._rls_bypass:  # Skip RLS statements if bypassed
             return []
@@ -31,36 +32,19 @@ class _RlsSessionMixin:
         if not items:
             return []
 
-        stmts = []
         set_parts = []
         set_params = {}
-        set_idx = 0
 
-        for key, value in items:
-            if value is not None:
-                # User-supplied values are passed exclusively through bound
-                # parameters to prevent SQL injection.
-                set_parts.append(
-                    f"set_config(:setting_{set_idx}, :value_{set_idx}, false)"
-                )
-                set_params[f"setting_{set_idx}"] = f"rls.{key}"
-                set_params[f"value_{set_idx}"] = str(value)
-                set_idx += 1
-            else:
-                # RESET removes the GUC from the session; current_setting(key, true)
-                # then returns NULL, so the policy expression filters out all rows.
-                # key is a pydantic model field name (code-defined, not user input).
-                stmts.append(sqlalchemy.text(f"RESET rls.{key}"))
+        for set_idx, (key, value) in enumerate(items):
+            # User-supplied values are passed exclusively through bound
+            # parameters to prevent SQL injection.
+            set_parts.append(f"set_config(:setting_{set_idx}, :value_{set_idx}, false)")
+            set_params[f"setting_{set_idx}"] = f"rls.{key}"
+            set_params[f"value_{set_idx}"] = "" if value is None else str(value)
 
-        if set_parts:
-            stmts.insert(
-                0,
-                sqlalchemy.text(f"SELECT {', '.join(set_parts)}").bindparams(
-                    **set_params
-                ),
-            )
-
-        return stmts
+        return [
+            sqlalchemy.text(f"SELECT {', '.join(set_parts)}").bindparams(**set_params)
+        ]
 
 
 class BypassRLSContext:
