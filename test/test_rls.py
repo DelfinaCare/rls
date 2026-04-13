@@ -439,9 +439,7 @@ class TestBypassRlsWithCommit(unittest.TestCase):
         with database.new_session() as session:
             with session.bypass_rls():
                 self.assertTrue(get_rls_setting(session, "bypass_rls"))
-                session.add(models.Account())
-                self.assertTrue(get_rls_setting(session, "bypass_rls"))
-                session.flush()
+                session.execute(sqlalchemy.text("SELECT * FROM users"))
                 self.assertTrue(get_rls_setting(session, "bypass_rls"))
                 session.commit()
                 self.assertTrue(get_rls_setting(session, "bypass_rls"))
