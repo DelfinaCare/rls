@@ -77,5 +77,11 @@ class Item(Base):
     ]
 
 
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, autoincrement=True)
+
+
 class SampleRlsContext(pydantic.BaseModel):
     account_id: int | None

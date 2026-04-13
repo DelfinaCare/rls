@@ -12,8 +12,8 @@ class _RlsSessionMixin:
         self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
+        self.context = context
         if context is not None:
-            self.context = context
             self._precompute_set_template()
 
     @property
@@ -113,6 +113,11 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         self._execute_set_statements()
         return super().execute(*args, **kwargs)
 
+    def commit(self):
+        super().commit()
+        if self._rls_bypass:
+            super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+
     def bypass_rls(self) -> BypassRLSContext:
         return BypassRLSContext(self)
 
@@ -160,6 +165,11 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         await self._execute_set_statements()
         return await super().execute(*args, **kwargs)
+
+    async def commit(self):
+        await super().commit()
+        if self._rls_bypass:
+            await super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
         return AsyncBypassRLSContext(self)
