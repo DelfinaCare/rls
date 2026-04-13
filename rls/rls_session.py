@@ -12,7 +12,7 @@ class _RlsSessionMixin:
     def __init__(self, context: Optional[pydantic.BaseModel] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass = False  # Track RLS bypass state
-        self._rls_set_template: Optional[sqlalchemy.TextClause] = None
+        self._rls_set_template: Optional[sqlalchemy.Select] = None
         self._rls_context_keys: list[str] = []
         if context is not None:
             self.context = context
@@ -22,27 +22,30 @@ class _RlsSessionMixin:
         """
         Pre-computes the SQL template for setting RLS config values at init time.
 
-        The SQL text and static setting-name bind parameters (rls.<field>) are
-        built once and stored.  Each call to _get_set_statements() then only
-        needs to substitute the current field values into this template, which
-        is significantly cheaper than rebuilding the entire statement every time.
+        The SQLAlchemy select() expression with literal setting names and named
+        bind parameters for the values is built once and stored.  Each call to
+        _get_set_statements() then only needs to substitute the current field
+        values into this template, which is significantly cheaper than rebuilding
+        the entire statement every time.
         """
         keys = list(type(self.context).model_fields.keys())
         if not keys:
             return
 
-        set_parts = []
-        static_params: dict[str, str] = {}
+        set_config_calls = []
         for key in keys:
             # Bind parameters are named after the field (e.g. setting_account_id,
             # value_account_id) so the mapping is explicit and not order-dependent.
-            set_parts.append(f"set_config(:setting_{key}, :value_{key}, false)")
-            static_params[f"setting_{key}"] = f"rls.{key}"
+            set_config_calls.append(
+                sqlalchemy.func.set_config(
+                    sqlalchemy.literal(f"rls.{key}"),
+                    sqlalchemy.bindparam(f"value_{key}"),
+                    sqlalchemy.false(),
+                )
+            )
 
         self._rls_context_keys = keys
-        self._rls_set_template = sqlalchemy.text(
-            f"SELECT {', '.join(set_parts)}"
-        ).bindparams(**static_params)
+        self._rls_set_template = sqlalchemy.select(*set_config_calls)
 
     def _get_set_statements(self):
         """
@@ -56,13 +59,13 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
-        # Only value substitution happens here — the template and setting-name
-        # parameters were already bound during _precompute_set_template().
+        # Only value substitution happens here — the template with literal setting
+        # names was already built during _precompute_set_template().
         value_params = {}
         for key in self._rls_context_keys:
             val = getattr(self.context, key)
             value_params[f"value_{key}"] = "" if val is None else str(val)
-        return [self._rls_set_template.bindparams(**value_params)]
+        return [self._rls_set_template.params(**value_params)]
 
 
 class BypassRLSContext:
