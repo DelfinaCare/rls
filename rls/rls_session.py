@@ -83,12 +83,12 @@ class BypassRLSContext:
         return self.session
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.session._rls_bypass_depth -= 1
         if exc_type is not None:
-            self.session._rls_bypass_depth = 0
             if self._is_outermost:
+                self.session._rls_bypass_depth = 0
                 self.session.rollback()
             return
-        self.session._rls_bypass_depth -= 1
         if self._is_outermost:
             self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
@@ -130,12 +130,12 @@ class AsyncBypassRLSContext:
         return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.session._rls_bypass_depth -= 1
         if exc_type is not None:
-            self.session._rls_bypass_depth = 0
             if self._is_outermost:
+                self.session._rls_bypass_depth = 0
                 await self.session.rollback()
             return
-        self.session._rls_bypass_depth -= 1
         if self._is_outermost:
             await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
