@@ -12,6 +12,7 @@ from test import expectations
 from test import models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
+_USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 
 
 def get_pg_rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
@@ -87,25 +88,13 @@ class TestRLSPolicies(unittest.TestCase):
 
         with rls_sess.begin():
             # Test Policy on table users with SELECT where (id = account_id)
-            my_user = (
-                rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
-                .mappings()
-                .fetchall()
-            )
-            self.assertEqual(len(my_user), 1, "Expected 1 user to be returned.")
-            self.assertEqual(my_user[0]["id"], 1, "Expected user id to be 1.")
-            self.assertEqual(
-                my_user[0]["username"], "user1", "Expected username to be 'user1'."
-            )
+            my_user = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(my_user, [1])
 
             # Test bypassing RLS
             with rls_sess.bypass_rls():
-                my_user = (
-                    rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(my_user), 2, "Expected 2 users to be returned.")
+                my_user = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(my_user, [1, 2])
 
     def test_rls_query_with_rls_sessioner_and_bypass(self):
         # Concrete implementation of ContextGetter
@@ -119,20 +108,12 @@ class TestRLSPolicies(unittest.TestCase):
         )
 
         with my_sessioner(account_id=1) as session:
-            res = (
-                session.execute(sqlalchemy.text("SELECT * FROM users"))
-                .mappings()
-                .fetchall()
-            )
-            self.assertEqual(len(res), 1, "Expected 1 user to be returned.")
-            self.assertEqual(res[0]["id"], 1, "Expected user id to be 1.")
-            self.assertEqual(
-                res[0]["username"], "user1", "Expected username to be 'user1'."
-            )
+            res = list(session.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(res, [1])
 
             with session.bypass_rls():
-                res = session.execute(sqlalchemy.text("SELECT * FROM users")).fetchall()
-                self.assertEqual(len(res), 2, "Expected 2 users to be returned.")
+                res = list(session.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(res, [1, 2])
 
 
 class TestRLSSessionBehavior(unittest.TestCase):
@@ -243,47 +224,29 @@ class TestRLSSessionBehavior(unittest.TestCase):
         with rls_sess1.begin():
             with rls_sess2.begin():
                 # Without bypass each session sees only its own user
-                result1 = (
-                    rls_sess1.execute(sqlalchemy.text("SELECT * FROM users"))
-                    .mappings()
-                    .fetchall()
-                )
-                result2 = (
-                    rls_sess2.execute(sqlalchemy.text("SELECT * FROM users"))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1), 1)
-                self.assertEqual(len(result2), 1)
+                result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+                result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(result1, [1])
+                self.assertEqual(result2, [2])
 
                 # Bypass session1 only
                 with rls_sess1.bypass_rls():
-                    result1_bypass = (
-                        rls_sess1.execute(sqlalchemy.text("SELECT * FROM users"))
-                        .mappings()
-                        .fetchall()
-                    )
-                    result2_no_bypass = (
-                        rls_sess2.execute(sqlalchemy.text("SELECT * FROM users"))
-                        .mappings()
-                        .fetchall()
+                    result1_bypass = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+                    result2_no_bypass = list(
+                        rls_sess2.execute(_USER_ID_QUERY).scalars()
                     )
                     self.assertEqual(
-                        len(result1_bypass), 2, "Bypassed session should see all users."
+                        result1_bypass, [1, 2], "Bypassed session should see all users."
                     )
                     self.assertEqual(
-                        len(result2_no_bypass),
-                        1,
+                        result2_no_bypass,
+                        [2],
                         "Non-bypassed session should see only its account's user.",
                     )
 
                 # After bypass exits, session1 is restricted again
-                result1_after = (
-                    rls_sess1.execute(sqlalchemy.text("SELECT * FROM users"))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1_after), 1)
+                result1_after = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(result1_after, [1])
         rls_sess1.close()
         rls_sess2.close()
 
@@ -309,8 +272,8 @@ class TestRLSSessionBehavior(unittest.TestCase):
             context=context, bind=self.non_superadmin_engine
         )
         with rls_sess.begin():
-            rows = rls_sess.execute(sqlalchemy.text("SELECT * FROM users")).fetchall()
-            self.assertEqual(len(rows), 0, "Expected no rows when account_id is None.")
+            rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         rls_sess.close()
 
     def test_different_contexts_see_different_data(self):
@@ -319,20 +282,10 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess2 = self._new_session(account_id=2)
         with rls_sess1.begin():
             with rls_sess2.begin():
-                result1 = (
-                    rls_sess1.execute(sqlalchemy.text("SELECT * FROM users"))
-                    .mappings()
-                    .fetchall()
-                )
-                result2 = (
-                    rls_sess2.execute(sqlalchemy.text("SELECT * FROM users"))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1), 1)
-                self.assertEqual(result1[0]["id"], 1)
-                self.assertEqual(len(result2), 1)
-                self.assertEqual(result2[0]["id"], 2)
+                result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+                result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(result1, [1])
+                self.assertEqual(result2, [2])
         rls_sess1.close()
         rls_sess2.close()
 
@@ -340,26 +293,16 @@ class TestRLSSessionBehavior(unittest.TestCase):
         """RLS context variables (e.g. account_id) still filter correctly after commit."""
         rls_sess = self._new_session(account_id=1)
         # Use autobegin (no explicit begin()) so we can manually commit
-        result = (
-            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
-            .mappings()
-            .fetchall()
-        )
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], 1)
+        result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+        self.assertEqual(result, [1])
         rls_sess.commit()
         # After commit a new autobegin transaction starts; context must still filter
-        result = (
-            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
-            .mappings()
-            .fetchall()
-        )
+        result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
         self.assertEqual(
-            len(result),
-            1,
+            result,
+            [1],
             "RLS context variable must still filter rows after commit.",
         )
-        self.assertEqual(result[0]["id"], 1)
         rls_sess.close()
 
     def test_bypass_rls_persists_across_commit(self):
