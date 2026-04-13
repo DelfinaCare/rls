@@ -116,9 +116,9 @@ class RLSOp(typing.Protocol):
 
 
 def _add_rls_imports(autogen_context: typing.Any) -> None:
-    """Inject the imports needed to use ``cast(RLSOp, op)`` in a migration file."""
-    autogen_context.imports.add("from typing import cast")
-    autogen_context.imports.add("from rls.alembic_rls import RLSOp")
+    """Inject the imports needed to use ``typing.cast(alembic_rls.RLSOp, op)`` in a migration file."""
+    autogen_context.imports.add("import typing")
+    autogen_context.imports.add("from rls import alembic_rls")
 
 
 ############################
@@ -129,13 +129,13 @@ def _add_rls_imports(autogen_context: typing.Any) -> None:
 @autogenerate.renderers.dispatch_for(EnableRlsOp)
 def render_enable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return "cast(RLSOp, op).enable_rls(%r)" % (op.tablename)
+    return "typing.cast(alembic_rls.RLSOp, op).enable_rls(%r)" % (op.tablename)
 
 
 @autogenerate.renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return "cast(RLSOp, op).disable_rls(%r)" % (op.tablename)
+    return "typing.cast(alembic_rls.RLSOp, op).disable_rls(%r)" % (op.tablename)
 
 
 ############################
@@ -414,13 +414,13 @@ def drop_policy(operations, operation):
 @autogenerate.renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return f"cast(RLSOp, op).create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return f"typing.cast(alembic_rls.RLSOp, op).create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
 
 
 @autogenerate.renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return f"cast(RLSOp, op).drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return f"typing.cast(alembic_rls.RLSOp, op).drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
 
 
 def set_metadata_info(Base: type[declarative.DeclarativeMeta]):
