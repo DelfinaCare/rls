@@ -1,11 +1,8 @@
-import contextlib
-
 import sqlalchemy as sa
 import testing.postgresql
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from rls import rls_session
 from test import models
 
 
@@ -25,21 +22,6 @@ class TestPostgres:
         self.non_superadmin_engine.dispose()
         self.async_non_superadmin_engine.sync_engine.dispose()
         self.postgresql.stop()
-
-
-instance: TestPostgres | None = None
-
-
-@contextlib.contextmanager
-def new_session():
-    """Yields an admin RlsSession using the module-level test postgres instance."""
-    if instance is None:
-        raise RuntimeError("database.instance must be set before calling new_session()")
-    session = rls_session.RlsSession(bind=instance.admin_engine)
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def test_postgres_instance() -> TestPostgres:

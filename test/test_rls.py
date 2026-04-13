@@ -139,6 +139,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.instance = database.test_postgres_instance()
+        cls.admin_engine = cls.instance.admin_engine
         cls.non_superadmin_engine = cls.instance.non_superadmin_engine
 
     @classmethod
@@ -362,6 +363,19 @@ class TestRLSSessionBehavior(unittest.TestCase):
         self.assertEqual(result[0]["id"], 1)
         rls_sess.close()
 
+    def test_bypass_rls_persists_across_commit(self):
+        """bypass_rls state persists across commit within the bypass context."""
+        rls_sess = rls_session.RlsSession(bind=self.admin_engine)
+        with rls_sess.bypass_rls():
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            rls_sess.commit()
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+        setting = get_pg_rls_setting(rls_sess, "bypass_rls")
+        self.assertIn(setting, {"", None, "false"})
+        rls_sess.close()
+
 
 class TestSQLInjectionProtection(unittest.TestCase):
     @classmethod
@@ -411,41 +425,6 @@ class TestSQLInjectionProtection(unittest.TestCase):
                 0,
                 "Public schema tables must still exist after a context with a malicious value.",
             )
-
-
-def get_rls_setting(session: rls_session.RlsSession, setting_name: str) -> bool:
-    """Reads a PostgreSQL RLS session setting and returns True if set to 'true'."""
-    value = session.execute(
-        sqlalchemy.text("SELECT current_setting(:setting, true);").bindparams(
-            setting=f"rls.{setting_name}"
-        )
-    ).scalar()
-    return value == "true"
-
-
-class TestBypassRlsWithCommit(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-        database.instance = cls.instance
-
-    @classmethod
-    def tearDownClass(cls):
-        database.instance = None
-        cls.instance.close()
-
-    def test_bypass_rls_setting_with_manual_commit(self):
-        """bypass_rls state persists across flush and commit within the bypass context."""
-        with database.new_session() as session:
-            with session.bypass_rls():
-                self.assertTrue(get_rls_setting(session, "bypass_rls"))
-                session.execute(sqlalchemy.text("SELECT * FROM users"))
-                self.assertTrue(get_rls_setting(session, "bypass_rls"))
-                session.commit()
-                self.assertTrue(get_rls_setting(session, "bypass_rls"))
-            self.assertFalse(get_rls_setting(session, "bypass_rls"))
-        with database.new_session() as session:
-            self.assertFalse(get_rls_setting(session, "bypass_rls"))
 
 
 if __name__ == "__main__":
