@@ -28,7 +28,7 @@ class RlsSessioner:
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.contextmanager
-    def __call__(self, *args: typing.Any | None, **kwargs: typing.Any | None):
+    def __call__(self, *args: typing.Any, **kwargs: typing.Any):
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:
@@ -57,7 +57,7 @@ class AsyncRlsSessioner:
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.asynccontextmanager
-    async def __call__(self, *args: typing.Any | None, **kwargs: typing.Any | None):
+    async def __call__(self, *args: typing.Any, **kwargs: typing.Any):
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:
