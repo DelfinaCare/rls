@@ -1,5 +1,3 @@
-from typing import Type
-
 import sqlalchemy as sa
 from alembic import autogenerate
 from alembic import operations as alembic_operations
@@ -371,7 +369,7 @@ def render_drop_policy(autogen_context, op):
     return f"op.drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\") # type: ignore"
 
 
-def set_metadata_info(Base: Type[declarative.DeclarativeMeta]):
+def set_metadata_info(Base: type[declarative.DeclarativeMeta]):
     """RLS policies are first added to the Metadata before applied."""
     Base.metadata.info.setdefault("rls_policies", dict())
     for mapper in Base.registry.mappers:

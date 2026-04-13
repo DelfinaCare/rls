@@ -1,11 +1,6 @@
 import inspect
+import typing
 from enum import Enum
-from typing import Callable
-from typing import List
-from typing import Literal
-from typing import Optional
-from typing import Type
-from typing import Union
 
 import pydantic
 import sqlalchemy
@@ -24,20 +19,20 @@ class Command(str, Enum):
 
 class ConditionArg(pydantic.BaseModel):
     comparator_name: str
-    type: Type[sql.sqltypes.TypeEngine]
+    type: type[sql.sqltypes.TypeEngine]
 
 
 class Policy(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
     definition: str
-    condition_args: Optional[List[ConditionArg]] = None
-    cmd: Union[Command, List[Command]]
-    custom_expr: Optional[Callable[..., elements.ClauseElement]] = None
-    custom_policy_name: Optional[str] = None
+    condition_args: list[ConditionArg] | None = None
+    cmd: Command | list[Command]
+    custom_expr: typing.Callable[..., elements.ClauseElement] | None = None
+    custom_policy_name: str | None = None
 
-    _policy_names: List[str] = pydantic.PrivateAttr(default_factory=list)
-    _compiled_custom_expr: Optional[elements.ClauseElement] = pydantic.PrivateAttr(
+    _policy_names: list[str] = pydantic.PrivateAttr(default_factory=list)
+    _compiled_custom_expr: elements.ClauseElement | None = pydantic.PrivateAttr(
         default=None
     )
     _expr: str = pydantic.PrivateAttr(default="")
@@ -166,8 +161,8 @@ class Policy(pydantic.BaseModel):
 
 
 class Permissive(Policy):
-    definition: Literal["PERMISSIVE"] = "PERMISSIVE"
+    definition: typing.Literal["PERMISSIVE"] = "PERMISSIVE"
 
 
 class Restrictive(Policy):
-    definition: Literal["RESTRICTIVE"] = "RESTRICTIVE"
+    definition: typing.Literal["RESTRICTIVE"] = "RESTRICTIVE"

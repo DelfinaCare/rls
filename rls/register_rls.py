@@ -1,5 +1,3 @@
-from typing import Type
-
 import sqlalchemy
 from sqlalchemy.ext import declarative
 
@@ -8,7 +6,7 @@ from rls import alembic_rls
 from . import create_policies
 
 
-def register_rls(Base: Type[declarative.DeclarativeMeta]):
+def register_rls(Base: type[declarative.DeclarativeMeta]):
     # required for `alembic revision --autogenerate``
     alembic_rls.set_metadata_info(Base)
 

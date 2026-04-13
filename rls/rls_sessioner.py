@@ -1,7 +1,6 @@
 import abc
 import contextlib
-from typing import Any
-from typing import Optional
+import typing
 
 import fastapi
 import pydantic
@@ -29,7 +28,7 @@ class RlsSessioner:
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.contextmanager
-    def __call__(self, *args: Optional[Any], **kwargs: Optional[Any]):
+    def __call__(self, *args: typing.Any, **kwargs: typing.Any):
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:
@@ -58,7 +57,7 @@ class AsyncRlsSessioner:
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.asynccontextmanager
-    async def __call__(self, *args: Optional[Any], **kwargs: Optional[Any]):
+    async def __call__(self, *args: typing.Any, **kwargs: typing.Any):
         context = self.context_getter.get_context(*args, **kwargs)
         session = self.session_maker(context=context)
         try:
