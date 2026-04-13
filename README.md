@@ -1,6 +1,6 @@
 # rls
 
-a package to provide row level security seamlessly to your python app by extending `sqlalchemy` and `alembic`.
+Adds PostgreSQL row-level security (RLS) support to your Python application by extending `sqlalchemy` and `alembic`.
 
 ---
 
@@ -12,8 +12,9 @@ pip install rls
 
 ## Usage
 
-### Creating Policies
-For a full working example, please see [`test/models.py`](test/models.py).
+### Defining Policies
+
+Attach `__rls_policies__` to any SQLAlchemy model to declare which RLS policies should apply to it. For a full working example see [`test/models.py`](test/models.py).
 
 ```python
 class User(Base):
@@ -72,11 +73,12 @@ class Item(Base):
     ]
 ```
 
-#### Condition Args
+#### ConditionArg
 
-`ConditionArg` is a class that takes two arguments:
-- `comparator_name`: the name of the variable that will be passed in the context
-- `type`: the sqlalchemy `sqltype` of the variable that will be passed in the context
+`ConditionArg` describes a variable that will be set on the PostgreSQL session before a query runs, allowing the policy expression to reference it.
+
+- `comparator_name`: the PostgreSQL session variable name
+- `type`: the SQLAlchemy type of the variable
 
 ```python
 from sqlalchemy import Integer
@@ -86,41 +88,37 @@ ConditionArg(comparator_name="account_id", type=Integer)
 
 #### Commands
 
-`Command` is an enum for possible sql commands, it has the following values:
-- `select` : for select queries
-- `insert` : for insert queries
-- `update` : for update queries
-- `delete` : for delete queries
-- `all` : for all queries
+`Command` is an enum of SQL operations a policy can target:
 
-
+| Value | Applies to |
+|---|---|
+| `select` | SELECT |
+| `insert` | INSERT |
+| `update` | UPDATE |
+| `delete` | DELETE |
+| `all` | all of the above |
 
 #### Expressions
-You can utilize lambda functions to create policies dynamically which
-operate on the `ConditionArg`(s) to define the policy. For example:
+
+Policy expressions are lambdas that receive the `ConditionArg` value(s) and return a SQLAlchemy boolean expression. For example:
 
 ```python
 from sqlalchemy import column
 
-# ConditionArg(comparator_name="account_id", type=Integer),
-
-lambda x: x > column("owner_id")
+lambda x: column("owner_id") == x
 ```
-this would take the column owner_id from the table and compare it with the first value passed in the context
-in this case would be the `account_id`
+
+This restricts rows to those whose `owner_id` matches the value of `account_id` supplied in the session context.
 
 #### Alembic
-`alembic` must be initialized  to be used when creating policies
 
-
-the rls policies are registered as metadata info and can be used with alembic
-but first in alembic `env.py` before setting
+RLS policies are stored as SQLAlchemy metadata and managed through Alembic migrations. In your `env.py`, replace the standard metadata assignment:
 
 ```python
 target_metadata = Base.metadata
 ```
 
-call our rls base wrapper instead
+with the RLS wrapper:
 
 ```python
 from rls.alembic_rls import set_metadata_info
@@ -128,21 +126,15 @@ from rls.alembic_rls import set_metadata_info
 target_metadata = set_metadata_info(Base).metadata
 ```
 
-which returns a base that its rls policies metadata set.
+Then generate a revision and run `alembic upgrade head` as normal — the policies will be created or dropped automatically.
 
-Now all you have to do is create a revision and run upgrade head with `alembic` for the policies to be created or dropped.
-
-for more info on handling alembic and it's custom operations check our [alembic docs](./alembic.md)
+For details on the custom Alembic operations used internally, see the [alembic docs](./alembic.md).
 
 ---
 
-### Using the policies
+### Using Policies at Runtime
 
-now that we have created the policies how are we going to use it?
-
-we have a custom sqlalchemy session class called `RlsSession` that extends sqlalchemy's `Session` which must be used or extended.
-
-and you have to pass the context which the session variables values will be taken from which should extend a `pydantic Base Model` and bind an `engine` to it.
+Policies are enforced through `RlsSession`, a drop-in replacement for SQLAlchemy's `Session`. You supply a Pydantic context object whose fields match the `comparator_name` values in your policies, plus a bound engine:
 
 ```python
 class MyContext(BaseModel):
@@ -155,23 +147,17 @@ session = RlsSession(context=context, bind=engine)
 
 res = session.execute(text("SELECT * FROM users")).fetchall()
 
-# Bypassing the rls policies with a context manager
-
+# Temporarily bypass RLS with a context manager
 with session.bypass_rls() as session:
     res2 = session.execute(text("SELECT * FROM items")).fetchall()
 ```
 
+#### RlsSessioner
 
+For applications that build a session per request or operation, `RlsSessioner` wraps a `sessionmaker` and a `ContextGetter` to produce ready-to-use `RlsSession` instances.
 
-you can use this session to talk to your db directly or you can create a session factory
-for which we provide our `RlsSessioner`.
-
-which takes two arguments:
-
-- `sessionmaker`: your own created session maker from our `RlsSession` or its subclass
-- `context_getter`: an instance of a class that extends `ContextGetter` that has the get context function implemented from which you can extract values from `args` or `kwargs` and assign it to your context variables.
-
-for which you have
+- `sessionmaker`: a SQLAlchemy `sessionmaker` configured with `class_=RlsSession`
+- `context_getter`: a subclass of `ContextGetter` that constructs the context object from arbitrary `args`/`kwargs`
 
 ```python
 from sqlalchemy.orm import sessionmaker
@@ -187,43 +173,41 @@ class ExampleContext(BaseModel):
     provider_id: int
 
 
-# Concrete implementation of ContextGetter
 class ExampleContextGetter(ContextGetter):
     def get_context(self, *args, **kwargs) -> ExampleContext:
-        account_id = kwargs.get("account_id", 1)
-        provider_id = kwargs.get("provider_id", 2)
-        return ExampleContext(account_id=account_id, provider_id=provider_id)
+        return ExampleContext(
+            account_id=kwargs.get("account_id", 1),
+            provider_id=kwargs.get("provider_id", 2),
+        )
 
-
-my_context = ExampleContextGetter()
 
 session_maker = sessionmaker(
     class_=RlsSession, autoflush=False, autocommit=False, bind=engine
 )
+my_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=ExampleContextGetter())
 
-my_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=my_context)
-
-
-
-with  my_sessioner(account_id=22, provider_id=99) as session:
+with my_sessioner(account_id=22, provider_id=99) as session:
     res = session.execute(text("SELECT * FROM users")).fetchall()
-    print(res) # output: List of users with account_id = 22 and provider_id = 99
+    print(res)  # users scoped to account_id=22, provider_id=99
 
-
-with  my_sessioner(account_id=11, provider_id=44) as session:
+with my_sessioner(account_id=11, provider_id=44) as session:
     res = session.execute(text("SELECT * FROM users")).fetchall()
-    print(res) # output: List of users with account_id = 11 and provider_id = 44
+    print(res)  # users scoped to account_id=11, provider_id=44
 ```
 
 ---
 
 ### Frameworks
 
-#### Fastapi
+#### FastAPI
 
-if you are trying to use the `RlsSessioner` with fastapi you may face some difficulties so that's why there is a ready made function for this integration to be injected in your request handler. For a complete runnable example, please see [`test/fastapi_sample.py`](test/fastapi_sample.py).
+In a FastAPI application every endpoint that touches the database needs the correct RLS context derived from the incoming request (e.g. the authenticated user's `account_id`). Without a structured approach it is easy for individual routes to set the context inconsistently, or to forget to set it at all.
 
+`fastapi_dependency_function` wraps an `RlsSessioner` as a FastAPI dependency so that the RLS context is populated from the request automatically and uniformly for every endpoint that declares it. The session injected into the handler already has the correct PostgreSQL session variables set, ensuring all queries are transparently scoped to the caller's data without any per-endpoint boilerplate.
+
+For a complete runnable example see [`test/fastapi_sample.py`](test/fastapi_sample.py).
 
 ---
+
 ## LICENSE
 [MIT](./LICENSE)
