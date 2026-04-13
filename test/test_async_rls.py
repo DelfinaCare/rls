@@ -134,6 +134,25 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             self.assertIn(setting, {"", None, "false"})
         await rls_sess.close()
 
+    async def test_nested_bypass_rls(self):
+        """Nested bypass_rls contexts maintain bypass until all contexts exit."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin():
+            async with rls_sess.bypass_rls():
+                self.assertEqual(
+                    await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
+                )
+                async with rls_sess.bypass_rls():
+                    self.assertEqual(
+                        await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
+                    )
+                self.assertEqual(
+                    await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
+                )
+            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
+            self.assertIn(setting, {"", None, "false"})
+        await rls_sess.close()
+
     async def test_python_exception_during_bypass_restores_state(self):
         """After a Python exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()

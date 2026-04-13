@@ -210,6 +210,19 @@ class TestRLSSessionBehavior(unittest.TestCase):
             self.assertIn(setting, {"", None, "false"})
         rls_sess.close()
 
+    def test_nested_bypass_rls(self):
+        """Nested bypass_rls contexts maintain bypass until all contexts exit."""
+        rls_sess = self._new_session()
+        with rls_sess.begin():
+            with rls_sess.bypass_rls():
+                self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+                with rls_sess.bypass_rls():
+                    self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+                self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
+            self.assertIn(setting, {"", None, "false"})
+        rls_sess.close()
+
     def test_python_exception_during_bypass_restores_state(self):
         """After a Python exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()
