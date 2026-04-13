@@ -6,8 +6,7 @@ import testing.postgresql
 from alembic import command
 from alembic import config as alembic_config
 
-from test.database import psycopg3_url
-from test.expectations import EXPECTED_POLICIES
+from test import database, expectations
 
 
 class TestAlembicOperations(unittest.TestCase):
@@ -17,7 +16,7 @@ class TestAlembicOperations(unittest.TestCase):
         cls.postgresql = testing.postgresql.PostgresqlFactory(
             cache_initialized_db=True
         )()
-        cls.engine_url = psycopg3_url(cls.postgresql.url())
+        cls.engine_url = database.psycopg3_url(cls.postgresql.url())
 
         # Initialize Alembic configuration
         cls.alembic_cfg = alembic_config.Config(
@@ -64,7 +63,7 @@ class TestAlembicOperations(unittest.TestCase):
 
             self.assertTrue(len(policies) == 6, "Expected 6 policies to be created")
 
-            for policy in EXPECTED_POLICIES:
+            for policy in expectations.EXPECTED_POLICIES:
                 matched_policy = next(
                     (p for p in policies if p["policyname"] == policy["policyname"]),
                     None,

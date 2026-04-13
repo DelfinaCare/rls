@@ -6,8 +6,7 @@ import sqlalchemy.exc
 from sqlalchemy import orm
 
 from rls import rls_session, rls_sessioner
-from test import database, models
-from test.expectations import EXPECTED_POLICIES
+from test import database, expectations, models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 
@@ -58,7 +57,7 @@ class TestRLSPolicies(unittest.TestCase):
                 "Expected 6 RLS policies to be applied to users and items tables.",
             )
 
-            for policy in EXPECTED_POLICIES:
+            for policy in expectations.EXPECTED_POLICIES:
                 matched_policy = next(
                     (p for p in policies if p["policyname"] == policy["policyname"]),
                     None,
