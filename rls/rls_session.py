@@ -30,6 +30,7 @@ class _RlsSessionMixin:
         values into this template, which is significantly cheaper than rebuilding
         the entire statement every time.
         """
+        assert self.context is not None  # only called when context is provided
         keys = list(type(self.context).model_fields.keys())
         if not keys:
             return

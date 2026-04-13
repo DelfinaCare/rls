@@ -34,9 +34,7 @@ instance: TestPostgres | None = None
 def new_session():
     """Yields an admin RlsSession using the module-level test postgres instance."""
     if instance is None:
-        raise RuntimeError(
-            "database.instance must be set before calling new_session()"
-        )
+        raise RuntimeError("database.instance must be set before calling new_session()")
     session = rls_session.RlsSession(bind=instance.admin_engine)
     try:
         yield session
