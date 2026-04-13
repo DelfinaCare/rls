@@ -27,15 +27,17 @@ class _RlsSessionMixin:
         needs to substitute the current field values into this template, which
         is significantly cheaper than rebuilding the entire statement every time.
         """
-        keys = list(self.context.model_fields.keys())
+        keys = list(type(self.context).model_fields.keys())
         if not keys:
             return
 
         set_parts = []
         static_params: dict[str, str] = {}
-        for idx, key in enumerate(keys):
-            set_parts.append(f"set_config(:setting_{idx}, :value_{idx}, false)")
-            static_params[f"setting_{idx}"] = f"rls.{key}"
+        for key in keys:
+            # Bind parameters are named after the field (e.g. setting_account_id,
+            # value_account_id) so the mapping is explicit and not order-dependent.
+            set_parts.append(f"set_config(:setting_{key}, :value_{key}, false)")
+            static_params[f"setting_{key}"] = f"rls.{key}"
 
         self._rls_context_keys = keys
         self._rls_set_template = sqlalchemy.text(
@@ -57,9 +59,9 @@ class _RlsSessionMixin:
         # Only value substitution happens here — the template and setting-name
         # parameters were already bound during _precompute_set_template().
         value_params = {}
-        for idx, key in enumerate(self._rls_context_keys):
+        for key in self._rls_context_keys:
             val = getattr(self.context, key)
-            value_params[f"value_{idx}"] = "" if val is None else str(val)
+            value_params[f"value_{key}"] = "" if val is None else str(val)
         return [self._rls_set_template.bindparams(**value_params)]
 
 
