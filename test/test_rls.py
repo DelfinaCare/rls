@@ -17,8 +17,8 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 
 def get_pg_rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
     """Reads a PostgreSQL RLS session setting value."""
-    return session.execute(
-        sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
+    return orm.Session.execute(
+        session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
     ).scalar()
 
 
