@@ -146,6 +146,33 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             self.assertIn(setting, {"", None, "false"})
         await rls_sess.close()
 
+    async def test_none_context_field_clears_rls_setting(self):
+        """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.AsyncRlsSession(
+            context=context, bind=self.instance.async_non_superadmin_engine
+        )
+        async with rls_sess.begin():
+            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(
+                setting,
+                "",
+                "RLS setting for a None context field must be reset to empty string.",
+            )
+        await rls_sess.close()
+
+    async def test_none_context_field_filters_results(self):
+        """A nullable pydantic field set to None returns no rows."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.AsyncRlsSession(
+            context=context, bind=self.instance.async_non_superadmin_engine
+        )
+        async with rls_sess.begin():
+            result = await rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            rows = result.fetchall()
+            self.assertEqual(len(rows), 0, "Expected no rows when account_id is None.")
+        await rls_sess.close()
+
     async def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)

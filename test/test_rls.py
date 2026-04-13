@@ -61,38 +61,38 @@ class TestRLSPolicies(unittest.TestCase):
                     "policyname": "items_smaller_than_or_equal_accountid_policy_all_policy_2",
                     "permissive": "PERMISSIVE",
                     "cmd": "ALL",
-                    "qual": "((owner_id <= (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((owner_id <= (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
                 {
                     "policyname": "items_greater_than_accountid_policy_select_policy_1",
                     "permissive": "PERMISSIVE",
                     "cmd": "SELECT",
-                    "qual": "((owner_id > (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((owner_id > (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
                 {
                     "policyname": "items_equal_to_accountid_policy_update_policy_0",
                     "permissive": "PERMISSIVE",
                     "cmd": "UPDATE",
-                    "qual": "((owner_id = (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((owner_id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
                 {
                     "policyname": "items_equal_to_accountid_policy_select_policy_0",
                     "permissive": "PERMISSIVE",
                     "cmd": "SELECT",
-                    "qual": "((owner_id = (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((owner_id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
                 {
                     "policyname": "users_equal_to_accountid_policy_update_policy_0",
                     "permissive": "PERMISSIVE",
                     "cmd": "UPDATE",
-                    "qual": "((id = (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
-                    "with_check": "((id = (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "with_check": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
                 {
                     "policyname": "users_equal_to_accountid_policy_select_policy_0",
                     "permissive": "PERMISSIVE",
                     "cmd": "SELECT",
-                    "qual": "((id = (current_setting('rls.account_id'::text, true))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
+                    "qual": "((id = (NULLIF(current_setting('rls.account_id'::text, true), ''::text))::integer) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true), ''::text))::boolean = true))",
                 },
             ]
 
@@ -309,6 +309,32 @@ class TestRLSSessionBehavior(unittest.TestCase):
                 self.assertEqual(len(result1_after), 1)
         rls_sess1.close()
         rls_sess2.close()
+
+    def test_none_context_field_clears_rls_setting(self):
+        """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
+        with rls_sess.begin():
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(
+                setting,
+                "",
+                "RLS setting for a None context field must be reset to empty string.",
+            )
+        rls_sess.close()
+
+    def test_none_context_field_filters_results(self):
+        """A nullable pydantic field set to None returns no rows."""
+        context = models.SampleRlsContext(account_id=None)
+        rls_sess = rls_session.RlsSession(
+            context=context, bind=self.non_superadmin_engine
+        )
+        with rls_sess.begin():
+            rows = rls_sess.execute(sqlalchemy.text("SELECT * FROM users")).fetchall()
+            self.assertEqual(len(rows), 0, "Expected no rows when account_id is None.")
+        rls_sess.close()
 
     def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""

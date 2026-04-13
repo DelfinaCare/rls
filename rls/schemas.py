@@ -80,8 +80,11 @@ class Policy(pydantic.BaseModel):
         """Convert the lambda function to a SQLAlchemy expression."""
         args = []
         for arg in self.condition_args:
-            wrapped_value = sql.func.current_setting(
-                f"{self.__condition_args_prefix}.{arg.comparator_name}", True
+            wrapped_value = sql.func.nullif(
+                sql.func.current_setting(
+                    f"{self.__condition_args_prefix}.{arg.comparator_name}", True
+                ),
+                "",
             ).cast(arg.type)
             args.append(wrapped_value)
         self.__compiled_custom_expr = self.custom_expr(*args)

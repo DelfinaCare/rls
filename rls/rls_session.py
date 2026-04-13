@@ -15,30 +15,52 @@ class _RlsSessionMixin:
         if context is not None:
             self.context = context
 
-    def _get_set_statement(self):
+    def _get_set_statements(self):
         """
-        Generates a single SQL statement to set all RLS config values.
+        Generates SQL statements to set all RLS config values.
 
-        Combines all set_config() calls into one SELECT statement with bound
-        parameters to prevent SQL injection from values passed through the context.
+        Non-None values are combined into a single SELECT set_config() statement
+        with bound parameters to prevent SQL injection.  None values emit a RESET
+        statement for their GUC, so current_setting(key, true) returns NULL and the
+        RLS policy expression evaluates to NULL (i.e. no rows are returned).
         """
         if self.context is None or self._rls_bypass:  # Skip RLS statements if bypassed
-            return None
+            return []
 
         items = list(self.context.model_dump().items())
         if not items:
-            return None
+            return []
 
-        parts = []
-        params = {}
-        for i, (key, value) in enumerate(items):
-            # parts only ever contains literal placeholder strings; user-supplied
-            # values are passed exclusively through bound parameters below.
-            parts.append(f"set_config(:setting_{i}, :value_{i}, false)")
-            params[f"setting_{i}"] = f"rls.{key}"
-            params[f"value_{i}"] = str(value) if value is not None else ""
+        stmts = []
+        set_parts = []
+        set_params = {}
+        set_idx = 0
 
-        return sqlalchemy.text(f"SELECT {', '.join(parts)}").bindparams(**params)
+        for key, value in items:
+            if value is not None:
+                # User-supplied values are passed exclusively through bound
+                # parameters to prevent SQL injection.
+                set_parts.append(
+                    f"set_config(:setting_{set_idx}, :value_{set_idx}, false)"
+                )
+                set_params[f"setting_{set_idx}"] = f"rls.{key}"
+                set_params[f"value_{set_idx}"] = str(value)
+                set_idx += 1
+            else:
+                # RESET removes the GUC from the session; current_setting(key, true)
+                # then returns NULL, so the policy expression filters out all rows.
+                # key is a pydantic model field name (code-defined, not user input).
+                stmts.append(sqlalchemy.text(f"RESET rls.{key}"))
+
+        if set_parts:
+            stmts.insert(
+                0,
+                sqlalchemy.text(f"SELECT {', '.join(set_parts)}").bindparams(
+                    **set_params
+                ),
+            )
+
+        return stmts
 
 
 class BypassRLSContext:
@@ -68,8 +90,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         if self._rls_bypass:  # Skip setting RLS when bypassing
             return
-        stmt = self._get_set_statement()
-        if stmt is not None:
+        for stmt in self._get_set_statements():
             super().execute(stmt)
 
     def execute(self, *args, **kwargs):
@@ -107,8 +128,7 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         if self._rls_bypass:  # Skip setting RLS when bypassing
             return
-        stmt = self._get_set_statement()
-        if stmt is not None:
+        for stmt in self._get_set_statements():
             await super().execute(stmt)
 
     async def execute(self, *args, **kwargs):
