@@ -10,6 +10,7 @@ from test import database
 from test import models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
+_USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 
 
 async def get_pg_rls_setting(
@@ -41,11 +42,8 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
             context=context, bind=self._async_engine()
         )
         async with rls_sess.begin():
-            result = await rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
-            users = result.mappings().fetchall()
-            self.assertEqual(len(users), 1)
-            self.assertEqual(users[0]["id"], 1)
-            self.assertEqual(users[0]["username"], "user1")
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
 
     async def test_rls_query_with_async_rls_session_and_bypass(self):
         """AsyncRlsSession with bypass_rls returns all users."""
@@ -55,9 +53,8 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
         )
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
-                result = await rls_sess.execute(sqlalchemy.text("SELECT * FROM users;"))
-                users = result.mappings().fetchall()
-                self.assertEqual(len(users), 2)
+                result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result, [1, 2])
 
 
 class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
@@ -188,9 +185,8 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             context=context, bind=self.instance.async_non_superadmin_engine
         )
         async with rls_sess.begin():
-            result = await rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
-            rows = result.fetchall()
-            self.assertEqual(len(rows), 0, "Expected no rows when account_id is None.")
+            rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         await rls_sess.close()
 
     async def test_different_contexts_see_different_data(self):
@@ -199,20 +195,10 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess2 = self._new_session(account_id=2)
         async with rls_sess1.begin():
             async with rls_sess2.begin():
-                result1 = (
-                    (await rls_sess1.execute(sqlalchemy.text("SELECT * FROM users")))
-                    .mappings()
-                    .fetchall()
-                )
-                result2 = (
-                    (await rls_sess2.execute(sqlalchemy.text("SELECT * FROM users")))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1), 1)
-                self.assertEqual(result1[0]["id"], 1)
-                self.assertEqual(len(result2), 1)
-                self.assertEqual(result2[0]["id"], 2)
+                result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result1, [1])
+                self.assertEqual(result2, [2])
         await rls_sess1.close()
         await rls_sess2.close()
 
@@ -223,55 +209,25 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         async with rls_sess1.begin():
             async with rls_sess2.begin():
                 # Without bypass each session sees only its own user
-                result1 = (
-                    (await rls_sess1.execute(sqlalchemy.text("SELECT * FROM users")))
-                    .mappings()
-                    .fetchall()
-                )
-                result2 = (
-                    (await rls_sess2.execute(sqlalchemy.text("SELECT * FROM users")))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1), 1)
-                self.assertEqual(len(result2), 1)
+                result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result1, [1])
+                self.assertEqual(result2, [2])
 
                 # Bypass session1 only
                 async with rls_sess1.bypass_rls():
-                    result1_bypass = (
-                        (
-                            await rls_sess1.execute(
-                                sqlalchemy.text("SELECT * FROM users")
-                            )
-                        )
-                        .mappings()
-                        .fetchall()
-                    )
-                    result2_no_bypass = (
-                        (
-                            await rls_sess2.execute(
-                                sqlalchemy.text("SELECT * FROM users")
-                            )
-                        )
-                        .mappings()
-                        .fetchall()
-                    )
+                    result1_bypass = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                    result2_no_bypass = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+                    self.assertEqual(result1_bypass, [1, 2], "Bypassed session should see all users.")
                     self.assertEqual(
-                        len(result1_bypass), 2, "Bypassed session should see all users."
-                    )
-                    self.assertEqual(
-                        len(result2_no_bypass),
-                        1,
+                        result2_no_bypass,
+                        [2],
                         "Non-bypassed session should see only its account's user.",
                     )
 
                 # After bypass exits, session1 is restricted again
-                result1_after = (
-                    (await rls_sess1.execute(sqlalchemy.text("SELECT * FROM users")))
-                    .mappings()
-                    .fetchall()
-                )
-                self.assertEqual(len(result1_after), 1)
+                result1_after = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result1_after, [1])
         await rls_sess1.close()
         await rls_sess2.close()
 
