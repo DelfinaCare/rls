@@ -125,6 +125,9 @@ class AsyncBypassRLSContext:
             return
         await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
+    async def execute(self, *args, **kwargs):
+        return await self.session.execute(*args, **kwargs)
+
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):

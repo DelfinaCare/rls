@@ -36,6 +36,7 @@ async def sample_database_setup(app: fastapi.FastAPI):
     test_db = database.test_postgres_instance()
     session_maker.configure(bind=test_db.non_superadmin_engine)
     yield
+    test_db.close()
 
 
 app = fastapi.FastAPI(lifespan=sample_database_setup)

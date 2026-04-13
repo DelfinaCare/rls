@@ -23,49 +23,47 @@ class ConditionArg(pydantic.BaseModel):
 
 
 class Policy(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
     definition: str
     condition_args: Optional[List[ConditionArg]] = None
     cmd: Union[Command, List[Command]]
     custom_expr: Optional[Callable[..., elements.ClauseElement]] = None
     custom_policy_name: Optional[str] = None
 
-    __policy_names: List[str] = []
-    __compiled_custom_expr: Optional[elements.ClauseElement] = None
-    __expr: str = ""
-    __policy_suffix: str = ""
-    __condition_args_prefix: str = "rls"
-
-    class Config:
-        arbitrary_types_allowed = True
+    _policy_names: List[str] = pydantic.PrivateAttr(default_factory=list)
+    _compiled_custom_expr: Optional[elements.ClauseElement] = pydantic.PrivateAttr(
+        default=None
+    )
+    _expr: str = pydantic.PrivateAttr(default="")
+    _policy_suffix: str = pydantic.PrivateAttr(default="")
+    _condition_args_prefix: str = pydantic.PrivateAttr(default="rls")
 
     @property
     def policy_names(self) -> list[str]:
-        """Getter for the private __policy_name field."""
-        return self.__policy_names
+        """Getter for the private _policy_names field."""
+        return self._policy_names
 
     @property
     def expression(self) -> str:
-        """Getter for the private __expr field."""
-        return self.__expr
+        """Getter for the private _expr field."""
+        return self._expr
 
     @expression.setter
     def expression(self, expr: str) -> None:
-        self.__expr = expr
+        self._expr = expr
 
     def _ensure_boolean(self):
         """
         Ensures that the given expression evaluates to a Boolean value.
-        If not, it casts the expression to Boolean.
+        Raises ValueError if the expression is not of Boolean type.
         """
-        # Check if the expression is already of Boolean type
-        if isinstance(self.__compiled_custom_expr.type, sqlalchemy.Boolean):
+        if isinstance(self._compiled_custom_expr.type, sqlalchemy.Boolean):
             return True
 
-        # Otherwise, cast the expression to Boolean explicitly or raise an error
         raise ValueError("Expression does not evaluate to a Boolean value")
-        # return expression.cast(Boolean)
 
-    def _validate_Arguments_length(self):
+    def _validate_arguments_length(self):
         condition_args_length = (
             len(self.condition_args) if self.condition_args is not None else 0
         )
@@ -82,20 +80,20 @@ class Policy(pydantic.BaseModel):
         for arg in self.condition_args:
             wrapped_value = sql.func.nullif(
                 sql.func.current_setting(
-                    f"{self.__condition_args_prefix}.{arg.comparator_name}", True
+                    f"{self._condition_args_prefix}.{arg.comparator_name}", True
                 ),
                 "",
             ).cast(arg.type)
             args.append(wrapped_value)
-        self.__compiled_custom_expr = self.custom_expr(*args)
-        self.__expr = str(
-            self.__compiled_custom_expr.compile(compile_kwargs={"literal_binds": True})
+        self._compiled_custom_expr = self.custom_expr(*args)
+        self._expr = str(
+            self._compiled_custom_expr.compile(compile_kwargs={"literal_binds": True})
         )
 
     def _get_expr_from_custom_expr(self, table_name: str):
         """Get the SQL expression from the custom expression with RLS prefixing."""
         if self.custom_expr is not None:
-            self._validate_Arguments_length()
+            self._validate_arguments_length()
 
             self._convert_lambda_to_clause_element()
 
@@ -109,10 +107,12 @@ class Policy(pydantic.BaseModel):
         from . import utils
 
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
-        self.__policy_suffix = name_suffix
+        self._policy_suffix = name_suffix
 
         self._get_expr_from_custom_expr(table_name=table_name)
 
+        # Reset policy names for this call so re-invocations don't accumulate duplicates.
+        self._policy_names = []
         policy_lists = []
 
         for cmd in commands:
@@ -122,22 +122,22 @@ class Policy(pydantic.BaseModel):
             if self.custom_policy_name is not None:
                 policy_name = (
                     f"{table_name}_{self.custom_policy_name}"
-                    f"_{cmd_value}_policy_{self.__policy_suffix}".lower()
+                    f"_{cmd_value}_policy_{self._policy_suffix}".lower()
                 )
             else:
                 policy_name = (
                     f"{table_name}_{self.definition}"
-                    f"_{cmd_value}_policy_{self.__policy_suffix}".lower()
+                    f"_{cmd_value}_policy_{self._policy_suffix}".lower()
                 )
 
-            self.__policy_names.append(policy_name)
+            self._policy_names.append(policy_name)
 
             generated_policy = utils.generate_rls_policy(
                 cmd=cmd_value,
                 definition=self.definition,
                 policy_name=policy_name,
                 table_name=table_name,
-                expr=self.__expr,
+                expr=self._expr,
             )
             policy_lists.append(generated_policy)
         return policy_lists
