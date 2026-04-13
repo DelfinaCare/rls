@@ -17,8 +17,8 @@ async def get_pg_rls_setting(
     session: rls_session.AsyncRlsSession, setting_name: str
 ) -> str:
     """Reads a PostgreSQL RLS session setting value."""
-    result = await session.execute(
-        sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
+    result = await sa_asyncio.AsyncSession.execute(
+        session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
     )
     return result.scalar()
 
