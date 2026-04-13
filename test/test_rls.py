@@ -390,7 +390,9 @@ class TestSQLInjectionProtection(unittest.TestCase):
 def get_rls_setting(session: rls_session.RlsSession, setting_name: str) -> bool:
     """Reads a PostgreSQL RLS session setting and returns True if set to 'true'."""
     value = session.execute(
-        sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
+        sqlalchemy.text("SELECT current_setting(:setting, true);").bindparams(
+            setting=f"rls.{setting_name}"
+        )
     ).scalar()
     return value == "true"
 
@@ -399,11 +401,11 @@ class TestBypassRlsWithCommit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.instance = database.test_postgres_instance()
-        database._instance = cls.instance
+        database.instance = cls.instance
 
     @classmethod
     def tearDownClass(cls):
-        database._instance = None
+        database.instance = None
         cls.instance.close()
 
     def test_bypass_rls_setting_with_manual_commit(self):

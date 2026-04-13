@@ -27,17 +27,17 @@ class TestPostgres:
         self.postgresql.stop()
 
 
-_instance: TestPostgres | None = None
+instance: TestPostgres | None = None
 
 
 @contextlib.contextmanager
 def new_session():
     """Yields an admin RlsSession using the module-level test postgres instance."""
-    if _instance is None:
+    if instance is None:
         raise RuntimeError(
-            "database._instance must be set before calling new_session()"
+            "database.instance must be set before calling new_session()"
         )
-    session = rls_session.RlsSession(bind=_instance.admin_engine)
+    session = rls_session.RlsSession(bind=instance.admin_engine)
     try:
         yield session
     finally:
