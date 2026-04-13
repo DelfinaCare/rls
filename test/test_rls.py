@@ -6,7 +6,8 @@ import sqlalchemy.exc
 from sqlalchemy import orm
 
 from rls import rls_session, rls_sessioner
-from test import EXPECTED_POLICIES, database, models
+from test import database, models
+from test.expectations import EXPECTED_POLICIES
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 

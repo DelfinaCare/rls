@@ -6,8 +6,8 @@ import testing.postgresql
 from alembic import command
 from alembic import config as alembic_config
 
-from test import EXPECTED_POLICIES
 from test.database import psycopg3_url
+from test.expectations import EXPECTED_POLICIES
 
 
 class TestAlembicOperations(unittest.TestCase):
