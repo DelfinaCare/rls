@@ -9,12 +9,16 @@ class _RlsSessionMixin:
 
     def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._rls_bypass = False  # Track RLS bypass state
+        self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         if context is not None:
             self.context = context
             self._precompute_set_template()
+
+    @property
+    def _rls_bypass(self) -> bool:
+        return self._rls_bypass_depth > 0
 
     def _precompute_set_template(self) -> None:
         """
@@ -69,18 +73,24 @@ class _RlsSessionMixin:
 class BypassRLSContext:
     def __init__(self, session: "RlsSession"):
         self.session = session
+        self._is_outermost = False
 
     def __enter__(self):
-        self.session._rls_bypass = True
-        self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+        self._is_outermost = self.session._rls_bypass_depth == 0
+        self.session._rls_bypass_depth += 1
+        if self._is_outermost:
+            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
         return self.session
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.session._rls_bypass = False
         if exc_type is not None:
-            self.session.rollback()
+            self.session._rls_bypass_depth = 0
+            if self._is_outermost:
+                self.session.rollback()
             return
-        self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
+        self.session._rls_bypass_depth -= 1
+        if self._is_outermost:
+            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
     def execute(self, *args, **kwargs):
         return self.session.execute(*args, **kwargs)
@@ -110,21 +120,24 @@ class RlsSession(_RlsSessionMixin, orm.Session):
 class AsyncBypassRLSContext:
     def __init__(self, session: "AsyncRlsSession"):
         self.session = session
+        self._is_outermost = False
 
     async def __aenter__(self):
-        self.session._rls_bypass = True
-        await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+        self._is_outermost = self.session._rls_bypass_depth == 0
+        self.session._rls_bypass_depth += 1
+        if self._is_outermost:
+            await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
         return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.session._rls_bypass = False
         if exc_type is not None:
-            await self.session.rollback()
+            self.session._rls_bypass_depth = 0
+            if self._is_outermost:
+                await self.session.rollback()
             return
-        await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
-
-    async def execute(self, *args, **kwargs):
-        return await self.session.execute(*args, **kwargs)
+        self.session._rls_bypass_depth -= 1
+        if self._is_outermost:
+            await self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
