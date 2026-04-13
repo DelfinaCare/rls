@@ -40,7 +40,9 @@ class _RlsSessionMixin:
             if value is not None:
                 # User-supplied values are passed exclusively through bound
                 # parameters to prevent SQL injection.
-                set_parts.append(f"set_config(:setting_{set_idx}, :value_{set_idx}, false)")
+                set_parts.append(
+                    f"set_config(:setting_{set_idx}, :value_{set_idx}, false)"
+                )
                 set_params[f"setting_{set_idx}"] = f"rls.{key}"
                 set_params[f"value_{set_idx}"] = str(value)
                 set_idx += 1
@@ -53,7 +55,9 @@ class _RlsSessionMixin:
         if set_parts:
             stmts.insert(
                 0,
-                sqlalchemy.text(f"SELECT {', '.join(set_parts)}").bindparams(**set_params),
+                sqlalchemy.text(f"SELECT {', '.join(set_parts)}").bindparams(
+                    **set_params
+                ),
             )
 
         return stmts
