@@ -56,10 +56,10 @@ class _RlsSessionMixin:
 
         # Only value substitution happens here — the template and setting-name
         # parameters were already bound during _precompute_set_template().
-        value_params = {
-            f"value_{idx}": "" if getattr(self.context, key) is None else str(getattr(self.context, key))
-            for idx, key in enumerate(self._rls_context_keys)
-        }
+        value_params = {}
+        for idx, key in enumerate(self._rls_context_keys):
+            val = getattr(self.context, key)
+            value_params[f"value_{idx}"] = "" if val is None else str(val)
         return [self._rls_set_template.bindparams(**value_params)]
 
 
