@@ -78,4 +78,3 @@ def fastapi_dependency_function(sessioner: RlsSessioner):
             yield session
 
     return dependency_function
-
