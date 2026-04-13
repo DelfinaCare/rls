@@ -336,6 +336,45 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess1.close()
         rls_sess2.close()
 
+    def test_rls_context_variable_persists_after_commit(self):
+        """RLS context variables (e.g. account_id) still filter correctly after commit."""
+        rls_sess = self._new_session(account_id=1)
+        # Use autobegin (no explicit begin()) so we can manually commit
+        result = (
+            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            .mappings()
+            .fetchall()
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], 1)
+        rls_sess.commit()
+        # After commit a new autobegin transaction starts; context must still filter
+        result = (
+            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            .mappings()
+            .fetchall()
+        )
+        self.assertEqual(
+            len(result),
+            1,
+            "RLS context variable must still filter rows after commit.",
+        )
+        self.assertEqual(result[0]["id"], 1)
+        rls_sess.close()
+
+    def test_bypass_rls_persists_across_commit(self):
+        """bypass_rls state persists across commit within the bypass context."""
+        rls_sess = self._new_session()
+        with rls_sess.bypass_rls():
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            rls_sess.execute(sqlalchemy.text("SELECT * FROM users"))
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            rls_sess.commit()
+            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+        setting = get_pg_rls_setting(rls_sess, "bypass_rls")
+        self.assertIn(setting, {"", None, "false"})
+        rls_sess.close()
+
 
 class TestSQLInjectionProtection(unittest.TestCase):
     @classmethod
