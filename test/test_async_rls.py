@@ -216,9 +216,15 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
 
                 # Bypass session1 only
                 async with rls_sess1.bypass_rls():
-                    result1_bypass = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
-                    result2_no_bypass = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
-                    self.assertEqual(result1_bypass, [1, 2], "Bypassed session should see all users.")
+                    result1_bypass = list(
+                        (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
+                    )
+                    result2_no_bypass = list(
+                        (await rls_sess2.execute(_USER_ID_QUERY)).scalars()
+                    )
+                    self.assertEqual(
+                        result1_bypass, [1, 2], "Bypassed session should see all users."
+                    )
                     self.assertEqual(
                         result2_no_bypass,
                         [2],
@@ -226,7 +232,9 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
                     )
 
                 # After bypass exits, session1 is restricted again
-                result1_after = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                result1_after = list(
+                    (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
+                )
                 self.assertEqual(result1_after, [1])
         await rls_sess1.close()
         await rls_sess2.close()

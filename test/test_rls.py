@@ -232,8 +232,12 @@ class TestRLSSessionBehavior(unittest.TestCase):
                 # Bypass session1 only
                 with rls_sess1.bypass_rls():
                     result1_bypass = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                    result2_no_bypass = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
-                    self.assertEqual(result1_bypass, [1, 2], "Bypassed session should see all users.")
+                    result2_no_bypass = list(
+                        rls_sess2.execute(_USER_ID_QUERY).scalars()
+                    )
+                    self.assertEqual(
+                        result1_bypass, [1, 2], "Bypassed session should see all users."
+                    )
                     self.assertEqual(
                         result2_no_bypass,
                         [2],
