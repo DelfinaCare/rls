@@ -318,6 +318,128 @@ class TestRLSSessionBehavior(unittest.TestCase):
         self.assertIn(setting, {"", None, "false"})
         rls_sess.close()
 
+    def test_begin_sets_rls_account_id_setting(self):
+        """begin() sets the rls.account_id pg setting to the context value."""
+        rls_sess = self._new_session(account_id=1)
+        with rls_sess.begin():
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+        rls_sess.close()
+
+    def test_scalar_sets_rls_settings(self):
+        """scalar() applies RLS and returns only the account's user id."""
+        rls_sess = self._new_session(account_id=1)
+        result = rls_sess.scalar(_USER_ID_QUERY)
+        self.assertEqual(result, 1)
+        rls_sess.close()
+
+    def test_scalars_sets_rls_settings(self):
+        """scalars() applies RLS and returns only the account's user id."""
+        rls_sess = self._new_session(account_id=1)
+        result = list(rls_sess.scalars(_USER_ID_QUERY))
+        self.assertEqual(result, [1])
+        rls_sess.close()
+
+    def test_flush_preserves_rls_settings(self):
+        """flush() does not disrupt the rls.account_id setting established by begin()."""
+        rls_sess = self._new_session(account_id=1)
+        with rls_sess.begin():
+            rls_sess.flush()
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result, [1])
+        rls_sess.close()
+
+
+class TestRLSWithOrmModels(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.instance.close()
+
+    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
+        return rls_session.RlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.non_superadmin_engine,
+        )
+
+    def test_begin_sets_rls_with_user_orm(self):
+        """begin() sets rls.account_id and ORM User query returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        with rls_sess.begin():
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            users = list(
+                rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users], [1])
+        rls_sess.close()
+
+    def test_scalar_with_user_orm_applies_rls(self):
+        """scalar() with User ORM model returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        user = rls_sess.scalar(sqlalchemy.select(models.User).order_by(models.User.id))
+        self.assertIsNotNone(user)
+        self.assertEqual(user.id, 1)
+        rls_sess.close()
+
+    def test_scalar_with_user_orm_hides_other_account(self):
+        """scalar() with User ORM model does not return a user from another account."""
+        rls_sess = self._new_session(account_id=1)
+        user = rls_sess.scalar(
+            sqlalchemy.select(models.User).where(models.User.id == 2)
+        )
+        self.assertIsNone(user)
+        rls_sess.close()
+
+    def test_scalars_with_user_orm_applies_rls(self):
+        """scalars() with User ORM model returns only the account's user."""
+        rls_sess = self._new_session(account_id=1)
+        users = list(
+            rls_sess.scalars(sqlalchemy.select(models.User).order_by(models.User.id))
+        )
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0].id, 1)
+        rls_sess.close()
+
+    def test_scalars_with_user_orm_different_account(self):
+        """scalars() with User ORM model returns only the correct account's user."""
+        rls_sess = self._new_session(account_id=2)
+        users = list(
+            rls_sess.scalars(sqlalchemy.select(models.User).order_by(models.User.id))
+        )
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0].id, 2)
+        rls_sess.close()
+
+    def test_flush_with_user_orm_preserves_rls(self):
+        """flush() after loading User ORM objects preserves RLS filtering."""
+        rls_sess = self._new_session(account_id=1)
+        with rls_sess.begin():
+            users = list(
+                rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users], [1])
+            rls_sess.flush()
+            setting = get_pg_rls_setting(rls_sess, "account_id")
+            self.assertEqual(setting, "1")
+            users_after_flush = list(
+                rls_sess.scalars(
+                    sqlalchemy.select(models.User).order_by(models.User.id)
+                )
+            )
+            self.assertEqual([u.id for u in users_after_flush], [1])
+        rls_sess.close()
+
 
 class TestSQLInjectionProtection(unittest.TestCase):
     @classmethod
