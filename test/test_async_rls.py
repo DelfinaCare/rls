@@ -239,6 +239,40 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         await rls_sess1.close()
         await rls_sess2.close()
 
+    async def test_rls_context_variable_persists_after_commit(self):
+        """RLS context variables (e.g. account_id) still filter correctly after commit."""
+        rls_sess = self._new_session(account_id=1)
+        # Use autobegin (no explicit begin()) so we can manually commit
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(result, [1])
+        await rls_sess.commit()
+        # After commit a new autobegin transaction starts; context must still filter
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(
+            result,
+            [1],
+            "RLS context variable must still filter rows after commit.",
+        )
+        await rls_sess.close()
+
+    async def test_bypass_rls_persists_across_commit(self):
+        """bypass_rls state persists across commit within the bypass context."""
+        rls_sess = self._new_session()
+        async with rls_sess.bypass_rls():
+            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1, 2])
+            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            await rls_sess.commit()
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1, 2])
+            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(result, [1])
+        setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
+        self.assertIn(setting, {"", None, "false"})
+        await rls_sess.close()
+
     async def test_begin_sets_rls_account_id_setting(self):
         """begin() sets the rls.account_id pg setting to the context value."""
         rls_sess = self._new_session(account_id=1)
