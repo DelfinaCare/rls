@@ -3,11 +3,15 @@ import unittest
 
 import sqlalchemy
 import testing.postgresql
+from alembic import autogenerate
 from alembic import command
 from alembic import config as alembic_config
+from alembic.runtime import migration
 
+from rls import alembic_rls
 from test import database
 from test import expectations
+from test import models
 
 
 class TestAlembicOperations(unittest.TestCase):
@@ -81,6 +85,21 @@ class TestAlembicOperations(unittest.TestCase):
                         value,
                         f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
                     )
+
+    def test_no_spurious_diffs_after_migration(self):
+        """After applying migrations, autogenerating again should produce no changes."""
+        command.upgrade(self.alembic_cfg, "head")
+
+        target_metadata = alembic_rls.set_metadata_info(models.Base).metadata
+        with self.admin_engine.connect() as conn:
+            ctx = migration.MigrationContext.configure(conn)
+            diffs = autogenerate.compare_metadata(ctx, target_metadata)
+
+        self.assertEqual(
+            diffs,
+            [],
+            f"Expected no spurious diffs after migration, but found: {diffs}",
+        )
 
 
 if __name__ == "__main__":
