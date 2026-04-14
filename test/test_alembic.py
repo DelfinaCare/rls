@@ -86,7 +86,6 @@ class TestAlembicOperations(unittest.TestCase):
                         f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
                     )
 
-
     def test_no_spurious_diffs_after_migration(self):
         """After applying migrations, autogenerating again should produce no changes."""
         command.upgrade(self.alembic_cfg, "head")
