@@ -12,6 +12,7 @@ class _RlsSessionMixin:
     def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
+        self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         self.context = context
@@ -90,9 +91,11 @@ class BypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
+                self.session._rls_needs_bypass_reapply = False
                 self.session.rollback()
             return
         if self._is_outermost:
+            self.session._rls_needs_bypass_reapply = False
             self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
     def execute(self, *args, **kwargs):
@@ -104,7 +107,12 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         Executes the RLS SET statements unless bypassing RLS.
         """
-        if self._rls_bypass:  # Skip setting RLS when bypassing
+        if self._rls_bypass:
+            # Re-apply the bypass flag if a commit cleared it since the last command.
+            if self._rls_needs_bypass_reapply:
+                self._rls_needs_bypass_reapply = False
+                super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+            # Always skip normal RLS context settings when bypassing.
             return
         for stmt in self._get_set_statements():
             super().execute(stmt)
@@ -139,7 +147,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
     def commit(self):
         super().commit()
         if self._rls_bypass:
-            super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+            self._rls_needs_bypass_reapply = True
 
     def bypass_rls(self) -> BypassRLSContext:
         return BypassRLSContext(self)
@@ -164,9 +172,11 @@ class AsyncBypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
+                self.session._rls_needs_bypass_reapply = False
                 await self.session.rollback()
             return
         if self._is_outermost:
+            self.session._rls_needs_bypass_reapply = False
             await self.session.execute(
                 sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
             )
@@ -177,7 +187,14 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         Executes the RLS SET statements unless bypassing RLS.
         """
-        if self._rls_bypass:  # Skip setting RLS when bypassing
+        if self._rls_bypass:
+            # Re-apply the bypass flag if a commit cleared it since the last command.
+            if self._rls_needs_bypass_reapply:
+                self._rls_needs_bypass_reapply = False
+                await super().execute(
+                    sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
+                )
+            # Always skip normal RLS context settings when bypassing.
             return
         for stmt in self._get_set_statements():
             await super().execute(stmt)
@@ -212,7 +229,7 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def commit(self):
         await super().commit()
         if self._rls_bypass:
-            await super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+            self._rls_needs_bypass_reapply = True
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
         return AsyncBypassRLSContext(self)
