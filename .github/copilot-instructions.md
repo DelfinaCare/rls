@@ -2,7 +2,7 @@
 
 ## Linting
 
-Lint all Python code with [ruff](https://docs.astral.sh/ruff/).
+Lint and format all Python code with [ruff](https://docs.astral.sh/ruff/).
 
 ## Import Style
 
