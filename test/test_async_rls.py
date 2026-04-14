@@ -250,20 +250,14 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
     async def test_scalar_sets_rls_settings(self):
         """scalar() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
-        result = await rls_sess.scalar(
-            sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
-        )
+        result = await rls_sess.scalar(_USER_ID_QUERY)
         self.assertEqual(result, 1)
         await rls_sess.close()
 
     async def test_scalars_sets_rls_settings(self):
         """scalars() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
-        result = list(
-            await rls_sess.scalars(
-                sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
-            )
-        )
+        result = list(await rls_sess.scalars(_USER_ID_QUERY))
         self.assertEqual(result, [1])
         await rls_sess.close()
 

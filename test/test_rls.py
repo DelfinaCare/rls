@@ -329,7 +329,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_scalar_sets_rls_settings(self):
         """scalar() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
-        result = rls_sess.scalar(sqlalchemy.text("SELECT id FROM users ORDER BY id ASC"))
+        result = rls_sess.scalar(_USER_ID_QUERY)
         self.assertEqual(result, 1)
         rls_sess.close()
 
@@ -337,7 +337,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         """scalars() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
         result = list(
-            rls_sess.scalars(sqlalchemy.text("SELECT id FROM users ORDER BY id ASC"))
+            rls_sess.scalars(_USER_ID_QUERY)
         )
         self.assertEqual(result, [1])
         rls_sess.close()
