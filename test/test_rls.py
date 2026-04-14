@@ -336,9 +336,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_scalars_sets_rls_settings(self):
         """scalars() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
-        result = list(
-            rls_sess.scalars(_USER_ID_QUERY)
-        )
+        result = list(rls_sess.scalars(_USER_ID_QUERY))
         self.assertEqual(result, [1])
         rls_sess.close()
 
@@ -387,9 +385,7 @@ class TestRLSWithOrmModels(unittest.TestCase):
     def test_scalar_with_user_orm_applies_rls(self):
         """scalar() with User ORM model returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
-        user = rls_sess.scalar(
-            sqlalchemy.select(models.User).order_by(models.User.id)
-        )
+        user = rls_sess.scalar(sqlalchemy.select(models.User).order_by(models.User.id))
         self.assertIsNotNone(user)
         self.assertEqual(user.id, 1)
         rls_sess.close()
