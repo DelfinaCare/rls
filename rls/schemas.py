@@ -7,6 +7,8 @@ import sqlalchemy
 from sqlalchemy import sql
 from sqlalchemy.sql import elements
 
+from . import _sql_gen
+
 
 class Command(str, Enum):
     # policies: https://www.postgresql.org/docs/current/sql-createpolicy.html
@@ -59,7 +61,7 @@ class Policy(pydantic.BaseModel):
         Raises ValueError if the expression is not of Boolean type.
         """
         if isinstance(self._compiled_custom_expr.type, sqlalchemy.Boolean):
-            return True
+            return
 
         raise ValueError("Expression does not evaluate to a Boolean value")
 
@@ -72,7 +74,6 @@ class Policy(pydantic.BaseModel):
             raise ValueError(
                 f"Length mismatch for arguments. Expected {condition_args_length}, got {lambda_args_length}"
             )
-        return True
 
     def _convert_lambda_to_clause_element(self):
         """Convert the lambda function to a SQLAlchemy expression."""
@@ -100,12 +101,11 @@ class Policy(pydantic.BaseModel):
             self._ensure_boolean()
         else:
             raise ValueError(
-                f"`custom_expr` must be defined for table `{table_name}`. If you're constructing expressions dynamically, "
+                f"`custom_expr` must be defined for table `{table_name}`. "
+                "If you're constructing expressions dynamically, provide a callable."
             )
 
     def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
-        from . import utils
-
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
         self._policy_suffix = name_suffix
 
@@ -116,7 +116,7 @@ class Policy(pydantic.BaseModel):
         policy_lists = []
 
         for cmd in commands:
-            cmd_value = cmd.value if isinstance(cmd, Command) else cmd
+            cmd_value = cmd.value
 
             policy_name = ""
             if self.custom_policy_name is not None:
@@ -132,7 +132,7 @@ class Policy(pydantic.BaseModel):
 
             self._policy_names.append(policy_name)
 
-            generated_policy = utils.generate_rls_policy(
+            generated_policy = _sql_gen.generate_rls_policy(
                 cmd=cmd_value,
                 definition=self.definition,
                 policy_name=policy_name,
@@ -143,14 +143,12 @@ class Policy(pydantic.BaseModel):
         return policy_lists
 
     def __eq__(self, other):
-        from . import utils
-
         if not isinstance(other, Policy):
             return NotImplemented
 
         definition_check = self.definition == other.definition
         cmd_check = self.cmd == other.cmd
-        expression_check = utils.compare_between_policy_sql_expressions(
+        expression_check = _sql_gen.compare_between_policy_sql_expressions(
             self.expression, other.expression
         )
 

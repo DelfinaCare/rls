@@ -12,9 +12,8 @@ from rls import rls_session
 
 class ContextGetter(abc.ABC):
     @abc.abstractmethod
-    def get_context(self, *args, **kwargs) -> pydantic.BaseModel:
+    def get_context(self, *args, **kwargs) -> pydantic.BaseModel | None:
         """Abstract method to get context"""
-        pass
 
 
 class RlsSessioner:
@@ -75,6 +74,14 @@ class AsyncRlsSessioner:
 def fastapi_dependency_function(sessioner: RlsSessioner):
     def dependency_function(request: fastapi.Request):
         with sessioner(request=request) as session:
+            yield session
+
+    return dependency_function
+
+
+def async_fastapi_dependency_function(sessioner: AsyncRlsSessioner):
+    async def dependency_function(request: fastapi.Request):
+        async with sessioner(request=request) as session:
             yield session
 
     return dependency_function

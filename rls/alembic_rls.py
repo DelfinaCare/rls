@@ -6,6 +6,7 @@ from alembic import operations as alembic_operations
 from sqlalchemy.dialects import postgresql as pg_dialect
 from sqlalchemy.ext import declarative
 
+from . import _sql_gen
 from . import schemas
 from . import utils
 
@@ -58,19 +59,19 @@ class DisableRlsOp(alembic_operations.MigrateOperation):
 @alembic_operations.Operations.implementation_for(EnableRlsOp)
 def enable_rls(operations, operation):
     if operation.schemaname is not None:
-        name = "%s.%s" % (operation.schemaname, operation.tablename)
+        name = f"{operation.schemaname}.{operation.tablename}"
     else:
         name = operation.tablename
-    operations.execute("ALTER TABLE %s ENABLE ROW LEVEL SECURITY" % name)
+    operations.execute(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY")
 
 
 @alembic_operations.Operations.implementation_for(DisableRlsOp)
 def disable_rls(operations, operation):
     if operation.schemaname is not None:
-        name = "%s.%s" % (operation.schemaname, operation.tablename)
+        name = f"{operation.schemaname}.{operation.tablename}"
     else:
         name = operation.tablename
-    operations.execute("ALTER TABLE %s DISABLE ROW LEVEL SECURITY" % name)
+    operations.execute(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY")
 
 
 ############################
@@ -153,8 +154,6 @@ def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
         .where(sa.column("tablename") == tablename)
     )
     result = conn.execute(query).fetchall()
-    # Convert to a list of dictionaries
-    # result_dicts = [dict(zip(columns, row)) for row in result]
 
     # Convert query result to a list of Policy objects
     policies = []
@@ -201,6 +200,11 @@ def check_rls_enabled(conn, schemaname, tablename) -> bool:
     return result
 
 
+def _cmd_value(cmd: schemas.Command | str) -> str:
+    """Return the plain string value of a Command enum member or a plain string."""
+    return cmd.value if isinstance(cmd, schemas.Command) else cmd
+
+
 @autogenerate.comparators.dispatch_for("table")
 def compare_table_level(
     autogen_context, modify_ops, schemaname, tablename, conn_table, metadata_table
@@ -241,17 +245,10 @@ def compare_table_level(
         all_metadata_policy_names.extend(policy_meta.policy_names)
         policy_expr = policy_meta.expression
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
-            current_cmd = ""
             if isinstance(policy_meta.cmd, list):
-                if isinstance(policy_meta.cmd[ix], schemas.Command):
-                    current_cmd = policy_meta.cmd[ix].value
-                else:
-                    current_cmd = policy_meta.cmd[ix]
+                current_cmd = _cmd_value(policy_meta.cmd[ix])
             else:
-                if isinstance(policy_meta.cmd, schemas.Command):
-                    current_cmd = policy_meta.cmd.value
-                else:
-                    current_cmd = policy_meta.cmd
+                current_cmd = _cmd_value(policy_meta.cmd)
 
             matched_policy = next(
                 (
@@ -393,8 +390,7 @@ def create_policy(operations, operation):
     expr = operation.expr
 
     # Generate the SQL to create the policy
-
-    sql = utils.generate_rls_policy(
+    sql = _sql_gen.generate_rls_policy(
         cmd=cmd,
         definition=definition,
         policy_name=policy_name,
@@ -414,13 +410,21 @@ def drop_policy(operations, operation):
 @autogenerate.renderers.dispatch_for(CreatePolicyOp)
 def render_create_policy(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return f"typing.cast(alembic_rls.RLSOp, op).create_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return (
+        f"typing.cast(alembic_rls.RLSOp, op).create_policy("
+        f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
+        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+    )
 
 
 @autogenerate.renderers.dispatch_for(DropPolicyOp)
 def render_drop_policy(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return f"typing.cast(alembic_rls.RLSOp, op).drop_policy(table_name={op.table_name!r}, policy_name={op.policy_name!r}, cmd={op.cmd!r}, definition='{op.definition}', expr=\"{op.expr}\")"
+    return (
+        f"typing.cast(alembic_rls.RLSOp, op).drop_policy("
+        f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
+        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+    )
 
 
 def set_metadata_info(Base: type[declarative.DeclarativeMeta]):
