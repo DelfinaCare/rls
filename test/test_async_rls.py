@@ -202,10 +202,12 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             conn, cursor, statement, parameters, executemany, context
         ):
             nonlocal set_statement_count
-            if "set_config(" in statement and "rls.account_id" in statement:
+            if "set_config(" in statement:
                 set_statement_count += 1
 
-        sqlalchemy.event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        sqlalchemy.event.listen(
+            sync_engine, "before_cursor_execute", before_cursor_execute
+        )
         try:
             async with rls_sess.begin():
                 first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
@@ -238,10 +240,12 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             conn, cursor, statement, parameters, executemany, context
         ):
             nonlocal set_statement_count
-            if "set_config(" in statement and "rls.account_id" in statement:
+            if "set_config(" in statement:
                 set_statement_count += 1
 
-        sqlalchemy.event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        sqlalchemy.event.listen(
+            sync_engine, "before_cursor_execute", before_cursor_execute
+        )
         try:
             async with rls_sess.begin():
                 first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())

@@ -288,7 +288,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
             conn, cursor, statement, parameters, executemany, context
         ):
             nonlocal set_statement_count
-            if "set_config(" in statement and "rls.account_id" in statement:
+            if "set_config(" in statement:
                 set_statement_count += 1
 
         sqlalchemy.event.listen(
@@ -327,7 +327,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
             conn, cursor, statement, parameters, executemany, context
         ):
             nonlocal set_statement_count
-            if "set_config(" in statement and "rls.account_id" in statement:
+            if "set_config(" in statement:
                 set_statement_count += 1
 
         sqlalchemy.event.listen(
