@@ -82,7 +82,6 @@ class _RlsSessionMixin:
 
         if (
             not needs_reapply_for_transaction
-            and self._rls_last_set_context_state is not None
             and self.context == self._rls_last_set_context_state
         ):
             return []
@@ -91,7 +90,9 @@ class _RlsSessionMixin:
         # names was already built during _precompute_set_template().
         value_params = self._get_current_context_value_params()
 
-        self._rls_last_set_context_state = self.context.model_copy(deep=True)
+        self._rls_last_set_context_state = (
+            None if self.context is None else self.context.model_copy(deep=True)
+        )
         return [self._rls_set_template.params(**value_params)]
 
     def _get_current_context_value_params(self) -> dict[str, str]:
