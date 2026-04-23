@@ -79,3 +79,8 @@ class Item(Base):
 
 class SampleRlsContext(pydantic.BaseModel):
     account_id: int | None
+
+
+class ImmutableSampleRlsContext(pydantic.BaseModel):
+    account_id: int | None
+    model_config = pydantic.ConfigDict(frozen=True)

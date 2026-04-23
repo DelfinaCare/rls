@@ -7,6 +7,10 @@ from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 
+class _HasTransaction(typing.Protocol):
+    def get_transaction(self) -> typing.Any: ...
+
+
 class _RlsSessionMixin:
     """Shared logic for RlsSession and AsyncRlsSession."""
 
@@ -110,7 +114,7 @@ class _RlsSessionMixin:
         )
 
     def _get_current_transaction_id(self) -> int | None:
-        current_transaction = typing.cast(typing.Any, self).get_transaction()
+        current_transaction = typing.cast(_HasTransaction, self).get_transaction()
         return None if current_transaction is None else id(current_transaction)
 
     def _mark_context_applied_to_current_transaction(self) -> None:

@@ -312,12 +312,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
 
     def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
-
-        class ImmutableSampleRlsContext(pydantic.BaseModel):
-            account_id: int | None
-            model_config = pydantic.ConfigDict(frozen=True)
-
-        context = ImmutableSampleRlsContext(account_id=1)
+        context = models.ImmutableSampleRlsContext(account_id=1)
         rls_sess = rls_session.RlsSession(
             context=context, bind=self.non_superadmin_engine
         )
