@@ -16,18 +16,22 @@ class _RlsSessionMixin:
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
+        self._rls_context_is_immutable = False
         self.context = context
         if context is not None:
+            self._rls_context_is_immutable = self._is_context_immutable(context)
             self._precompute_set_template()
 
     @property
     def _rls_bypass(self) -> bool:
         return self._rls_bypass_depth > 0
 
-    def _context_is_immutable(self) -> bool:
-        if self.context is None:
+    @staticmethod
+    def _is_context_immutable(context: pydantic.BaseModel) -> bool:
+        model_config = getattr(type(context), "model_config", None)
+        if model_config is None:
             return False
-        return bool(type(self.context).model_config.get("frozen"))
+        return bool(model_config.get("frozen"))
 
     def _precompute_set_template(self) -> None:
         """
@@ -75,7 +79,7 @@ class _RlsSessionMixin:
         if not self._rls_dirty:
             if (
                 self._rls_last_set_context_snapshot is not None
-                and self._context_is_immutable()
+                and self._rls_context_is_immutable
             ):
                 return []
             if self.context == self._rls_last_set_context_snapshot:

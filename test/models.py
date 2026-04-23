@@ -88,4 +88,6 @@ class ImmutableSampleRlsContext(pydantic.BaseModel):
 
 class ImmutableEqGuardRlsContext(ImmutableSampleRlsContext):
     def __eq__(self, other: object) -> bool:
-        raise AssertionError("Immutable context equality should not be called")
+        raise AssertionError(
+            "Test fixture: equality check should be skipped for immutable contexts"
+        )
