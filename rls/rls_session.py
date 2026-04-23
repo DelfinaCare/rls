@@ -1,4 +1,5 @@
 import contextlib
+import typing
 
 import pydantic
 import sqlalchemy
@@ -72,10 +73,7 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
-        current_transaction = self.get_transaction()
-        current_transaction_id = (
-            None if current_transaction is None else id(current_transaction)
-        )
+        current_transaction_id = self._get_current_transaction_id()
         has_applied_context = self._rls_last_set_context_state is not None
         needs_reapply_for_transaction = (
             not has_applied_context
@@ -110,6 +108,13 @@ class _RlsSessionMixin:
             else str(getattr(self.context, key))
             for key in self._rls_context_keys
         )
+
+    def _get_current_transaction_id(self) -> int | None:
+        current_transaction = typing.cast(typing.Any, self).get_transaction()
+        return None if current_transaction is None else id(current_transaction)
+
+    def _mark_context_applied_to_current_transaction(self) -> None:
+        self._rls_last_context_transaction_id = self._get_current_transaction_id()
 
 
 class BypassRLSContext:
@@ -154,10 +159,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
             return
         for stmt in self._get_set_statements():
             super().execute(stmt)
-            current_transaction = self.get_transaction()
-            self._rls_last_context_transaction_id = (
-                None if current_transaction is None else id(current_transaction)
-            )
+            self._mark_context_applied_to_current_transaction()
 
     @contextlib.contextmanager
     def begin(self):
@@ -240,10 +242,7 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             return
         for stmt in self._get_set_statements():
             await super().execute(stmt)
-            current_transaction = self.get_transaction()
-            self._rls_last_context_transaction_id = (
-                None if current_transaction is None else id(current_transaction)
-            )
+            self._mark_context_applied_to_current_transaction()
 
     @contextlib.asynccontextmanager
     async def begin(self):
