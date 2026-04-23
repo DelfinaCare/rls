@@ -20,15 +20,11 @@ class _RlsSessionMixin:
         self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
-        self._rls_context_is_immutable = False
-        self._rls_last_set_context_state: dict[str, str] | None = None
+        self._rls_last_set_context_state: pydantic.BaseModel | None = None
         self._rls_last_context_transaction_id: int | None = None
         self.context = context
         if context is not None:
             self._precompute_set_template()
-            self._rls_context_is_immutable = bool(
-                type(context).model_config.get("frozen", False)
-            )
 
     @property
     def _rls_bypass(self) -> bool:
@@ -84,30 +80,29 @@ class _RlsSessionMixin:
             or current_transaction_id != self._rls_last_context_transaction_id
         )
 
-        if self._rls_context_is_immutable and not needs_reapply_for_transaction:
-            return []
-
-        current_state = self._get_current_context_state()
         if (
             not needs_reapply_for_transaction
-            and current_state == self._rls_last_set_context_state
+            and self._rls_last_set_context_state is not None
+            and self.context == self._rls_last_set_context_state
         ):
             return []
 
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
-        value_params = {f"value_{key}": value for key, value in current_state.items()}
+        value_params = self._get_current_context_value_params()
 
-        self._rls_last_set_context_state = current_state
+        self._rls_last_set_context_state = self.context.model_copy(deep=True)
         return [self._rls_set_template.params(**value_params)]
 
-    def _get_current_context_state(self) -> dict[str, str]:
+    def _get_current_context_value_params(self) -> dict[str, str]:
         if self.context is None:
             return {}
         return {
-            key: ""
-            if getattr(self.context, key) is None
-            else str(getattr(self.context, key))
+            f"value_{key}": (
+                ""
+                if getattr(self.context, key) is None
+                else str(getattr(self.context, key))
+            )
             for key in self._rls_context_keys
         }
 
