@@ -88,14 +88,14 @@ class _RlsSessionMixin:
 
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
-        value_params = self._get_current_context_value_params()
+        value_params = self._build_rls_value_params()
 
         # Keep an isolated deep snapshot so nested mutable fields changed in-place
         # are detected by equality checks on subsequent calls.
         self._rls_last_set_context_snapshot = self.context.model_copy(deep=True)
         return [self._rls_set_template.params(**value_params)]
 
-    def _get_current_context_value_params(self) -> dict[str, str]:
+    def _build_rls_value_params(self) -> dict[str, str]:
         if self.context is None:
             return {}
         return {
