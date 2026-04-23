@@ -157,8 +157,10 @@ class RlsSession(_RlsSessionMixin, orm.Session):
                 super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
             # Always skip normal RLS context settings when bypassing.
             return
-        for stmt in self._get_set_statements():
+        set_statements = self._get_set_statements()
+        for stmt in set_statements:
             super().execute(stmt)
+        if set_statements:
             self._mark_context_applied_to_current_transaction()
 
     @contextlib.contextmanager
@@ -240,8 +242,10 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
                 )
             # Always skip normal RLS context settings when bypassing.
             return
-        for stmt in self._get_set_statements():
+        set_statements = self._get_set_statements()
+        for stmt in set_statements:
             await super().execute(stmt)
+        if set_statements:
             self._mark_context_applied_to_current_transaction()
 
     @contextlib.asynccontextmanager
