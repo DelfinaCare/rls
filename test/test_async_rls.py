@@ -189,6 +189,72 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         await rls_sess.close()
 
+    async def test_mutable_context_change_reapplies_rls_setting(self):
+        """Changing a mutable context field triggers RLS setting re-application."""
+        context = models.SampleRlsContext(account_id=1)
+        rls_sess = rls_session.AsyncRlsSession(
+            context=context, bind=self.instance.async_non_superadmin_engine
+        )
+        set_statement_count = 0
+        sync_engine = self.instance.async_non_superadmin_engine.sync_engine
+
+        def before_cursor_execute(
+            conn, cursor, statement, parameters, executemany, context
+        ):
+            nonlocal set_statement_count
+            if "set_config(" in statement and "rls.account_id" in statement:
+                set_statement_count += 1
+
+        sqlalchemy.event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            async with rls_sess.begin():
+                first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(first_rows, [1])
+                context.account_id = 2
+                second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(second_rows, [2])
+            self.assertEqual(set_statement_count, 2)
+        finally:
+            sqlalchemy.event.remove(
+                sync_engine, "before_cursor_execute", before_cursor_execute
+            )
+            await rls_sess.close()
+
+    async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
+        """An immutable context avoids redundant RLS setting re-application."""
+
+        class ImmutableSampleRlsContext(pydantic.BaseModel):
+            account_id: int | None
+            model_config = pydantic.ConfigDict(frozen=True)
+
+        context = ImmutableSampleRlsContext(account_id=1)
+        rls_sess = rls_session.AsyncRlsSession(
+            context=context, bind=self.instance.async_non_superadmin_engine
+        )
+        set_statement_count = 0
+        sync_engine = self.instance.async_non_superadmin_engine.sync_engine
+
+        def before_cursor_execute(
+            conn, cursor, statement, parameters, executemany, context
+        ):
+            nonlocal set_statement_count
+            if "set_config(" in statement and "rls.account_id" in statement:
+                set_statement_count += 1
+
+        sqlalchemy.event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            async with rls_sess.begin():
+                first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(first_rows, [1])
+                self.assertEqual(second_rows, [1])
+            self.assertEqual(set_statement_count, 1)
+        finally:
+            sqlalchemy.event.remove(
+                sync_engine, "before_cursor_execute", before_cursor_execute
+            )
+            await rls_sess.close()
+
     async def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)

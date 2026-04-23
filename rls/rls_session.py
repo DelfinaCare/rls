@@ -15,9 +15,15 @@ class _RlsSessionMixin:
         self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
+        self._rls_context_is_immutable = False
+        self._rls_last_set_context_state: tuple[str, ...] | None = None
+        self._rls_last_context_transaction_id: int | None = None
         self.context = context
         if context is not None:
             self._precompute_set_template()
+            self._rls_context_is_immutable = bool(
+                type(context).model_config.get("frozen", False)
+            )
 
     @property
     def _rls_bypass(self) -> bool:
@@ -66,13 +72,42 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
+        current_transaction = self.get_transaction()
+        current_transaction_id = (
+            None if current_transaction is None else id(current_transaction)
+        )
+        has_applied_context = self._rls_last_set_context_state is not None
+        needs_reapply_for_transaction = (
+            not has_applied_context
+            or current_transaction_id != self._rls_last_context_transaction_id
+        )
+
+        if self._rls_context_is_immutable and not needs_reapply_for_transaction:
+            return []
+
+        current_state = self._get_current_context_state()
+        if (
+            not needs_reapply_for_transaction
+            and current_state == self._rls_last_set_context_state
+        ):
+            return []
+
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
         value_params = {}
-        for key in self._rls_context_keys:
-            val = getattr(self.context, key)
-            value_params[f"value_{key}"] = "" if val is None else str(val)
+        for index, key in enumerate(self._rls_context_keys):
+            value_params[f"value_{key}"] = current_state[index]
+
+        self._rls_last_set_context_state = current_state
         return [self._rls_set_template.params(**value_params)]
+
+    def _get_current_context_state(self) -> tuple[str, ...]:
+        if self.context is None:
+            return ()
+        return tuple(
+            "" if getattr(self.context, key) is None else str(getattr(self.context, key))
+            for key in self._rls_context_keys
+        )
 
 
 class BypassRLSContext:
@@ -117,6 +152,10 @@ class RlsSession(_RlsSessionMixin, orm.Session):
             return
         for stmt in self._get_set_statements():
             super().execute(stmt)
+            current_transaction = self.get_transaction()
+            self._rls_last_context_transaction_id = (
+                None if current_transaction is None else id(current_transaction)
+            )
 
     @contextlib.contextmanager
     def begin(self):
@@ -199,6 +238,10 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             return
         for stmt in self._get_set_statements():
             await super().execute(stmt)
+            current_transaction = self.get_transaction()
+            self._rls_last_context_transaction_id = (
+                None if current_transaction is None else id(current_transaction)
+            )
 
     @contextlib.asynccontextmanager
     async def begin(self):
