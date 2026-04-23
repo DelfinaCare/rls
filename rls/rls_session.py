@@ -1,14 +1,9 @@
 import contextlib
-import typing
 
 import pydantic
 import sqlalchemy
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
-
-
-class _HasTransaction(typing.Protocol):
-    def get_transaction(self) -> typing.Any: ...
 
 
 class _RlsSessionMixin:
@@ -17,11 +12,10 @@ class _RlsSessionMixin:
     def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
-        self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
+        self._rls_dirty = True
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
-        self._rls_last_context_transaction_id: int | None = None
         self.context = context
         if context is not None:
             self._precompute_set_template()
@@ -73,15 +67,8 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
-        current_transaction_id = self._get_current_transaction_id()
-        has_applied_context = self._rls_last_set_context_snapshot is not None
-        needs_reapply_for_transaction = (
-            not has_applied_context
-            or current_transaction_id != self._rls_last_context_transaction_id
-        )
-
         if (
-            not needs_reapply_for_transaction
+            not self._rls_dirty
             and self.context == self._rls_last_set_context_snapshot
         ):
             return []
@@ -105,14 +92,6 @@ class _RlsSessionMixin:
             for key in self._rls_context_keys
         }
 
-    def _get_current_transaction_id(self) -> int | None:
-        transaction = typing.cast(_HasTransaction, self).get_transaction()
-        return None if transaction is None else id(transaction)
-
-    def _mark_context_applied_to_current_transaction(self) -> None:
-        self._rls_last_context_transaction_id = self._get_current_transaction_id()
-
-
 class BypassRLSContext:
     def __init__(self, session: "RlsSession"):
         self.session = session
@@ -130,11 +109,9 @@ class BypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
-                self.session._rls_needs_bypass_reapply = False
                 self.session.rollback()
             return
         if self._is_outermost:
-            self.session._rls_needs_bypass_reapply = False
             self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
     def execute(self, *args, **kwargs):
@@ -148,8 +125,8 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         if self._rls_bypass:
             # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_needs_bypass_reapply:
-                self._rls_needs_bypass_reapply = False
+            if self._rls_dirty:
+                self._rls_dirty = False
                 super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
             # Always skip normal RLS context settings when bypassing.
             return
@@ -157,7 +134,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         for stmt in set_statements:
             super().execute(stmt)
         if set_statements:
-            self._mark_context_applied_to_current_transaction()
+            self._rls_dirty = False
 
     @contextlib.contextmanager
     def begin(self):
@@ -188,8 +165,11 @@ class RlsSession(_RlsSessionMixin, orm.Session):
 
     def commit(self):
         super().commit()
-        if self._rls_bypass:
-            self._rls_needs_bypass_reapply = True
+        self._rls_dirty = True
+
+    def rollback(self):
+        super().rollback()
+        self._rls_dirty = True
 
     def bypass_rls(self) -> BypassRLSContext:
         return BypassRLSContext(self)
@@ -214,11 +194,9 @@ class AsyncBypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
-                self.session._rls_needs_bypass_reapply = False
                 await self.session.rollback()
             return
         if self._is_outermost:
-            self.session._rls_needs_bypass_reapply = False
             await self.session.execute(
                 sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
             )
@@ -231,8 +209,8 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         if self._rls_bypass:
             # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_needs_bypass_reapply:
-                self._rls_needs_bypass_reapply = False
+            if self._rls_dirty:
+                self._rls_dirty = False
                 await super().execute(
                     sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
                 )
@@ -242,7 +220,7 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         for stmt in set_statements:
             await super().execute(stmt)
         if set_statements:
-            self._mark_context_applied_to_current_transaction()
+            self._rls_dirty = False
 
     @contextlib.asynccontextmanager
     async def begin(self):
@@ -273,8 +251,11 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
 
     async def commit(self):
         await super().commit()
-        if self._rls_bypass:
-            self._rls_needs_bypass_reapply = True
+        self._rls_dirty = True
+
+    async def rollback(self):
+        await super().rollback()
+        self._rls_dirty = True
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
         return AsyncBypassRLSContext(self)
