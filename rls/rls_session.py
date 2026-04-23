@@ -21,7 +21,7 @@ class _RlsSessionMixin:
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
         self._rls_context_is_immutable = False
-        self._rls_last_set_context_state: tuple[str, ...] | None = None
+        self._rls_last_set_context_state: dict[str, str] | None = None
         self._rls_last_context_transaction_id: int | None = None
         self.context = context
         if context is not None:
@@ -96,26 +96,24 @@ class _RlsSessionMixin:
 
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
-        value_params = {}
-        for key, value in zip(self._rls_context_keys, current_state, strict=True):
-            value_params[f"value_{key}"] = value
+        value_params = {f"value_{key}": value for key, value in current_state.items()}
 
         self._rls_last_set_context_state = current_state
         return [self._rls_set_template.params(**value_params)]
 
-    def _get_current_context_state(self) -> tuple[str, ...]:
+    def _get_current_context_state(self) -> dict[str, str]:
         if self.context is None:
-            return ()
-        return tuple(
-            ""
+            return {}
+        return {
+            key: ""
             if getattr(self.context, key) is None
             else str(getattr(self.context, key))
             for key in self._rls_context_keys
-        )
+        }
 
     def _get_current_transaction_id(self) -> int | None:
-        current_transaction = typing.cast(_HasTransaction, self).get_transaction()
-        return None if current_transaction is None else id(current_transaction)
+        transaction = typing.cast(_HasTransaction, self).get_transaction()
+        return None if transaction is None else id(transaction)
 
     def _mark_context_applied_to_current_transaction(self) -> None:
         self._rls_last_context_transaction_id = self._get_current_transaction_id()
