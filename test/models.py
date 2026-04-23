@@ -84,3 +84,8 @@ class SampleRlsContext(pydantic.BaseModel):
 class ImmutableSampleRlsContext(pydantic.BaseModel):
     account_id: int | None
     model_config = pydantic.ConfigDict(frozen=True)
+
+
+class ImmutableEqGuardRlsContext(ImmutableSampleRlsContext):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError("Immutable context equality should not be called")

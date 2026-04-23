@@ -24,6 +24,11 @@ class _RlsSessionMixin:
     def _rls_bypass(self) -> bool:
         return self._rls_bypass_depth > 0
 
+    def _context_is_immutable(self) -> bool:
+        if self.context is None:
+            return False
+        return bool(type(self.context).model_config.get("frozen"))
+
     def _precompute_set_template(self) -> None:
         """
         Pre-computes the SQL template for setting RLS config values at init time.
@@ -67,11 +72,14 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
-        if (
-            not self._rls_dirty
-            and self.context == self._rls_last_set_context_snapshot
-        ):
-            return []
+        if not self._rls_dirty:
+            if (
+                self._rls_last_set_context_snapshot is not None
+                and self._context_is_immutable()
+            ):
+                return []
+            if self.context == self._rls_last_set_context_snapshot:
+                return []
 
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
