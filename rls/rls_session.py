@@ -92,9 +92,7 @@ class _RlsSessionMixin:
 
         # Keep an isolated deep snapshot so nested mutable fields changed in-place
         # are detected by equality checks on subsequent calls.
-        self._rls_last_set_context_snapshot = (
-            None if self.context is None else self.context.model_copy(deep=True)
-        )
+        self._rls_last_set_context_snapshot = self.context.model_copy(deep=True)
         return [self._rls_set_template.params(**value_params)]
 
     def _get_current_context_value_params(self) -> dict[str, str]:
