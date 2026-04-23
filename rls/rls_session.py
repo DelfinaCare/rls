@@ -99,11 +99,9 @@ class _RlsSessionMixin:
         if self.context is None:
             return {}
         return {
-            f"value_{key}": (
-                ""
-                if getattr(self.context, key) is None
-                else str(getattr(self.context, key))
-            )
+            f"value_{key}": ""
+            if getattr(self.context, key) is None
+            else str(getattr(self.context, key))
             for key in self._rls_context_keys
         }
 
