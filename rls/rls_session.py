@@ -20,7 +20,7 @@ class _RlsSessionMixin:
         self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
-        self._rls_last_set_context_state: pydantic.BaseModel | None = None
+        self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
         self._rls_last_context_transaction_id: int | None = None
         self.context = context
         if context is not None:
@@ -74,7 +74,7 @@ class _RlsSessionMixin:
             return []
 
         current_transaction_id = self._get_current_transaction_id()
-        has_applied_context = self._rls_last_set_context_state is not None
+        has_applied_context = self._rls_last_set_context_snapshot is not None
         needs_reapply_for_transaction = (
             not has_applied_context
             or current_transaction_id != self._rls_last_context_transaction_id
@@ -82,7 +82,7 @@ class _RlsSessionMixin:
 
         if (
             not needs_reapply_for_transaction
-            and self.context == self._rls_last_set_context_state
+            and self.context == self._rls_last_set_context_snapshot
         ):
             return []
 
@@ -90,7 +90,9 @@ class _RlsSessionMixin:
         # names was already built during _precompute_set_template().
         value_params = self._get_current_context_value_params()
 
-        self._rls_last_set_context_state = (
+        # Keep an isolated deep snapshot so nested mutable fields changed in-place
+        # are detected by equality checks on subsequent calls.
+        self._rls_last_set_context_snapshot = (
             None if self.context is None else self.context.model_copy(deep=True)
         )
         return [self._rls_set_template.params(**value_params)]
