@@ -285,7 +285,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         set_statement_count = 0
 
         def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, context
+            conn, cursor, statement, parameters, executemany, exec_context
         ):
             nonlocal set_statement_count
             if "set_config(" in statement:
@@ -324,7 +324,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         set_statement_count = 0
 
         def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, context
+            conn, cursor, statement, parameters, executemany, exec_context
         ):
             nonlocal set_statement_count
             if "set_config(" in statement:

@@ -93,8 +93,8 @@ class _RlsSessionMixin:
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
         value_params = {}
-        for index, key in enumerate(self._rls_context_keys):
-            value_params[f"value_{key}"] = current_state[index]
+        for key, value in zip(self._rls_context_keys, current_state, strict=True):
+            value_params[f"value_{key}"] = value
 
         self._rls_last_set_context_state = current_state
         return [self._rls_set_template.params(**value_params)]

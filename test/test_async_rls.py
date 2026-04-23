@@ -199,7 +199,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         sync_engine = self.instance.async_non_superadmin_engine.sync_engine
 
         def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, context
+            conn, cursor, statement, parameters, executemany, exec_context
         ):
             nonlocal set_statement_count
             if "set_config(" in statement:
@@ -237,7 +237,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         sync_engine = self.instance.async_non_superadmin_engine.sync_engine
 
         def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, context
+            conn, cursor, statement, parameters, executemany, exec_context
         ):
             nonlocal set_statement_count
             if "set_config(" in statement:
