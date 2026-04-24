@@ -54,6 +54,205 @@ class TestConditionArg(unittest.TestCase):
         self.assertEqual(arg.type, sqlalchemy.String)
 
 
+class TestCompileCustomExpr(unittest.TestCase):
+    def test_returns_sql_string(self):
+        result = schemas.compile_custom_expr(
+            table_name="users",
+            condition_args=[
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            custom_expr=lambda x: sql.column("id") == x,
+        )
+        self.assertIsInstance(result, str)
+        self.assertIn("id", result)
+
+    def test_no_condition_args(self):
+        result = schemas.compile_custom_expr(
+            table_name="items",
+            condition_args=None,
+            custom_expr=lambda: sql.column("active") == sql.true(),
+        )
+        self.assertIsInstance(result, str)
+        self.assertIn("active", result)
+
+    def test_multiple_condition_args(self):
+        result = schemas.compile_custom_expr(
+            table_name="items",
+            condition_args=[
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+                schemas.ConditionArg(comparator_name="org_id", type=sqlalchemy.Integer),
+            ],
+            custom_expr=lambda x, y: (
+                (sql.column("owner_id") == x) & (sql.column("org_id") == y)
+            ),
+        )
+        self.assertIsInstance(result, str)
+        self.assertIn("owner_id", result)
+        self.assertIn("org_id", result)
+
+    def test_none_custom_expr_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            schemas.compile_custom_expr(
+                table_name="users",
+                condition_args=[
+                    schemas.ConditionArg(
+                        comparator_name="account_id", type=sqlalchemy.Integer
+                    ),
+                ],
+                custom_expr=None,
+            )
+        self.assertIn("custom_expr", str(ctx.exception))
+        self.assertIn("users", str(ctx.exception))
+
+    def test_argument_length_mismatch_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            schemas.compile_custom_expr(
+                table_name="users",
+                condition_args=[
+                    schemas.ConditionArg(
+                        comparator_name="account_id", type=sqlalchemy.Integer
+                    ),
+                ],
+                custom_expr=lambda: sql.column("id") == sql.literal(1),
+            )
+        self.assertIn("Length mismatch", str(ctx.exception))
+
+    def test_non_boolean_expression_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            schemas.compile_custom_expr(
+                table_name="users",
+                condition_args=[
+                    schemas.ConditionArg(
+                        comparator_name="account_id", type=sqlalchemy.Integer
+                    ),
+                ],
+                custom_expr=lambda x: x + sql.literal(1),
+            )
+        self.assertIn("Boolean", str(ctx.exception))
+
+    def test_string_type_condition_arg(self):
+        result = schemas.compile_custom_expr(
+            table_name="users",
+            condition_args=[
+                schemas.ConditionArg(comparator_name="tenant", type=sqlalchemy.String),
+            ],
+            custom_expr=lambda x: sql.column("tenant_name") == x,
+        )
+        self.assertIn("tenant_name", result)
+
+    def test_empty_condition_args_list(self):
+        result = schemas.compile_custom_expr(
+            table_name="items",
+            condition_args=[],
+            custom_expr=lambda: sql.column("active") == sql.true(),
+        )
+        self.assertIn("active", result)
+
+
+class TestPolicyChangedChecker(unittest.TestCase):
+    def _make_compiled_policy(self, **kwargs):
+        policy = _make_boolean_policy(**kwargs)
+        policy.get_sql_policies(table_name="users")
+        return policy
+
+    def test_matching_policies_returns_true(self):
+        meta_policy = self._make_compiled_policy()
+        from rls import _sql_gen
+
+        # Simulate a DB policy: single Command, expression already has bypass_rls
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(meta_policy.expression)
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertTrue(result)
+
+    def test_different_expression_returns_false(self):
+        meta_policy = self._make_compiled_policy()
+        different_policy = self._make_compiled_policy(
+            custom_expr=lambda x: sql.column("id") > x,
+        )
+        from rls import _sql_gen
+
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(
+            different_policy.expression
+        )
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertFalse(result)
+
+    def test_different_definition_returns_false(self):
+        meta_policy = schemas.Restrictive(
+            condition_args=[
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=[schemas.Command.select],
+            custom_expr=lambda x: sql.column("id") == x,
+        )
+        meta_policy.get_sql_policies(table_name="users")
+        from rls import _sql_gen
+
+        # DB policy has PERMISSIVE definition, but meta is RESTRICTIVE
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(meta_policy.expression)
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertFalse(result)
+
+    def test_list_cmd_is_unwrapped(self):
+        """policy_changed_checker unwraps a list cmd to a single Command for comparison."""
+        meta_policy = _make_boolean_policy(
+            cmd=[schemas.Command.select, schemas.Command.update],
+        )
+        meta_policy.get_sql_policies(table_name="users")
+        from rls import _sql_gen
+
+        # DB policy has single Command matching the first element of meta's list
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(meta_policy.expression)
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertTrue(result)
+
+    def test_does_not_mutate_original_policy(self):
+        """policy_changed_checker should not mutate the metadata_policy passed in."""
+        meta_policy = self._make_compiled_policy()
+        original_expr = meta_policy.expression
+        original_cmd = meta_policy.cmd
+        from rls import _sql_gen
+
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(meta_policy.expression)
+        schemas.policy_changed_checker(db_policy=db_policy, metadata_policy=meta_policy)
+        self.assertEqual(meta_policy.expression, original_expr)
+        self.assertEqual(meta_policy.cmd, original_cmd)
+
+
 class TestPolicy(unittest.TestCase):
     def test_get_sql_policies_single_cmd(self):
         policy = _make_boolean_policy(cmd=schemas.Command.select)

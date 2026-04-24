@@ -8,7 +8,6 @@ from sqlalchemy.ext import declarative
 
 from . import _sql_gen
 from . import schemas
-from . import utils
 
 ############################
 # OPERATIONS
@@ -275,7 +274,7 @@ def compare_table_level(
                 # Notice: Matched policy is db policy
                 tmp_policy_meta = policy_meta.model_copy()
                 tmp_policy_meta.cmd = schemas.Command(current_cmd)
-                if not utils.policy_changed_checker(
+                if not schemas.policy_changed_checker(
                     db_policy=matched_policy, metadata_policy=tmp_policy_meta
                 ):
                     # Policy has changed, so drop and recreate it
