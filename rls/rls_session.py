@@ -12,16 +12,26 @@ class _RlsSessionMixin:
     def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
-        self._rls_needs_bypass_reapply = False  # Set after commit while in bypass
+        self._rls_dirty = True
         self._rls_set_template: sqlalchemy.Select | None = None
         self._rls_context_keys: list[str] = []
+        self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
+        self._rls_context_is_immutable = False
         self.context = context
         if context is not None:
+            self._rls_context_is_immutable = self._is_context_immutable(context)
             self._precompute_set_template()
 
     @property
     def _rls_bypass(self) -> bool:
         return self._rls_bypass_depth > 0
+
+    @staticmethod
+    def _is_context_immutable(context: pydantic.BaseModel) -> bool:
+        model_config = getattr(type(context), "model_config", None)
+        if model_config is None:
+            return False
+        return bool(model_config.get("frozen"))
 
     def _precompute_set_template(self) -> None:
         """
@@ -66,13 +76,33 @@ class _RlsSessionMixin:
         if self.context is None or self._rls_bypass or self._rls_set_template is None:
             return []
 
+        if not self._rls_dirty:
+            if (
+                self._rls_last_set_context_snapshot is not None
+                and self._rls_context_is_immutable
+            ):
+                return []
+            if self.context == self._rls_last_set_context_snapshot:
+                return []
+
         # Only value substitution happens here — the template with literal setting
         # names was already built during _precompute_set_template().
-        value_params = {}
-        for key in self._rls_context_keys:
-            val = getattr(self.context, key)
-            value_params[f"value_{key}"] = "" if val is None else str(val)
+        value_params = self._build_rls_value_params()
+
+        # Keep an isolated deep snapshot so nested mutable fields changed in-place
+        # are detected by equality checks on subsequent calls.
+        self._rls_last_set_context_snapshot = self.context.model_copy(deep=True)
         return [self._rls_set_template.params(**value_params)]
+
+    def _build_rls_value_params(self) -> dict[str, str]:
+        if self.context is None:
+            return {}
+        return {
+            f"value_{key}": ""
+            if getattr(self.context, key) is None
+            else str(getattr(self.context, key))
+            for key in self._rls_context_keys
+        }
 
 
 class BypassRLSContext:
@@ -92,11 +122,9 @@ class BypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
-                self.session._rls_needs_bypass_reapply = False
                 self.session.rollback()
             return
         if self._is_outermost:
-            self.session._rls_needs_bypass_reapply = False
             self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
 
     def execute(self, *args, **kwargs):
@@ -110,13 +138,16 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         if self._rls_bypass:
             # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_needs_bypass_reapply:
-                self._rls_needs_bypass_reapply = False
+            if self._rls_dirty:
+                self._rls_dirty = False
                 super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
             # Always skip normal RLS context settings when bypassing.
             return
-        for stmt in self._get_set_statements():
+        set_statements = self._get_set_statements()
+        for stmt in set_statements:
             super().execute(stmt)
+        if set_statements:
+            self._rls_dirty = False
 
     @contextlib.contextmanager
     def begin(self):
@@ -147,8 +178,11 @@ class RlsSession(_RlsSessionMixin, orm.Session):
 
     def commit(self):
         super().commit()
-        if self._rls_bypass:
-            self._rls_needs_bypass_reapply = True
+        self._rls_dirty = True
+
+    def rollback(self):
+        super().rollback()
+        self._rls_dirty = True
 
     def bypass_rls(self) -> BypassRLSContext:
         return BypassRLSContext(self)
@@ -173,11 +207,9 @@ class AsyncBypassRLSContext:
         if exc_type is not None:
             if self._is_outermost:
                 self.session._rls_bypass_depth = 0
-                self.session._rls_needs_bypass_reapply = False
                 await self.session.rollback()
             return
         if self._is_outermost:
-            self.session._rls_needs_bypass_reapply = False
             await self.session.execute(
                 sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
             )
@@ -190,15 +222,18 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         """
         if self._rls_bypass:
             # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_needs_bypass_reapply:
-                self._rls_needs_bypass_reapply = False
+            if self._rls_dirty:
+                self._rls_dirty = False
                 await super().execute(
                     sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
                 )
             # Always skip normal RLS context settings when bypassing.
             return
-        for stmt in self._get_set_statements():
+        set_statements = self._get_set_statements()
+        for stmt in set_statements:
             await super().execute(stmt)
+        if set_statements:
+            self._rls_dirty = False
 
     @contextlib.asynccontextmanager
     async def begin(self):
@@ -229,8 +264,11 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
 
     async def commit(self):
         await super().commit()
-        if self._rls_bypass:
-            self._rls_needs_bypass_reapply = True
+        self._rls_dirty = True
+
+    async def rollback(self):
+        await super().rollback()
+        self._rls_dirty = True
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
         return AsyncBypassRLSContext(self)

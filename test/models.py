@@ -79,3 +79,15 @@ class Item(Base):
 
 class SampleRlsContext(pydantic.BaseModel):
     account_id: int | None
+
+
+class ImmutableSampleRlsContext(pydantic.BaseModel):
+    account_id: int | None
+    model_config = pydantic.ConfigDict(frozen=True)
+
+
+class ImmutableEqGuardRlsContext(ImmutableSampleRlsContext):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError(
+            "Test fixture: equality check should be skipped for immutable contexts"
+        )
