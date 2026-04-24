@@ -52,9 +52,7 @@ class FastapiTest(unittest.TestCase):
                     )
                 for _ in range(25):
                     tasks.append(
-                        make_request(
-                            client, "/all_users", None, ["user1", "user2"]
-                        )
+                        make_request(client, "/all_users", None, ["user1", "user2"])
                     )
                 return await asyncio.gather(*tasks)
 
