@@ -208,19 +208,20 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         sqlalchemy.event.listen(
             sync_engine, "before_cursor_execute", before_cursor_execute
         )
-        try:
-            async with rls_sess.begin():
-                first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(first_rows, [1])
-                context.account_id = 2
-                second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(second_rows, [2])
-            self.assertEqual(set_statement_count, 2)
-        finally:
-            sqlalchemy.event.remove(
-                sync_engine, "before_cursor_execute", before_cursor_execute
-            )
-            await rls_sess.close()
+        self.addCleanup(
+            sqlalchemy.event.remove,
+            sync_engine,
+            "before_cursor_execute",
+            before_cursor_execute,
+        )
+        self.addAsyncCleanup(rls_sess.close)
+        async with rls_sess.begin():
+            first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(first_rows, [1])
+            context.account_id = 2
+            second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(second_rows, [2])
+        self.assertEqual(set_statement_count, 2)
 
     async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
@@ -241,18 +242,19 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         sqlalchemy.event.listen(
             sync_engine, "before_cursor_execute", before_cursor_execute
         )
-        try:
-            async with rls_sess.begin():
-                first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(first_rows, [1])
-                self.assertEqual(second_rows, [1])
-            self.assertEqual(set_statement_count, 1)
-        finally:
-            sqlalchemy.event.remove(
-                sync_engine, "before_cursor_execute", before_cursor_execute
-            )
-            await rls_sess.close()
+        self.addCleanup(
+            sqlalchemy.event.remove,
+            sync_engine,
+            "before_cursor_execute",
+            before_cursor_execute,
+        )
+        self.addAsyncCleanup(rls_sess.close)
+        async with rls_sess.begin():
+            first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(first_rows, [1])
+            self.assertEqual(second_rows, [1])
+        self.assertEqual(set_statement_count, 1)
 
     async def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
