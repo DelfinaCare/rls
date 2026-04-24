@@ -282,15 +282,13 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = rls_session.RlsSession(
             context=context, bind=self.non_superadmin_engine
         )
-        try:
-            with rls_sess.begin():
-                first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(first_rows, [1])
-                context.account_id = 2
-                second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(second_rows, [2])
-        finally:
-            rls_sess.close()
+        with rls_sess.begin():
+            first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(first_rows, [1])
+            context.account_id = 2
+            second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(second_rows, [2])
+        rls_sess.close()
 
     def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
@@ -298,14 +296,12 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = rls_session.RlsSession(
             context=context, bind=self.non_superadmin_engine
         )
-        try:
-            with rls_sess.begin():
-                first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(first_rows, [1])
-                self.assertEqual(second_rows, [1])
-        finally:
-            rls_sess.close()
+        with rls_sess.begin():
+            first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(first_rows, [1])
+            self.assertEqual(second_rows, [1])
+        rls_sess.close()
 
     def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
@@ -313,14 +309,12 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = rls_session.RlsSession(
             context=context, bind=self.non_superadmin_engine
         )
-        try:
-            with rls_sess.begin():
-                first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(first_rows, [1])
-                self.assertEqual(second_rows, [1])
-        finally:
-            rls_sess.close()
+        with rls_sess.begin():
+            first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(first_rows, [1])
+            self.assertEqual(second_rows, [1])
+        rls_sess.close()
 
     def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""

@@ -260,14 +260,12 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess = rls_session.AsyncRlsSession(
             context=context, bind=self.instance.async_non_superadmin_engine
         )
-        try:
-            async with rls_sess.begin():
-                first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(first_rows, [1])
-                self.assertEqual(second_rows, [1])
-        finally:
-            await rls_sess.close()
+        async with rls_sess.begin():
+            first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(first_rows, [1])
+            self.assertEqual(second_rows, [1])
+        await rls_sess.close()
 
     async def test_different_contexts_see_different_data(self):
         """Sessions created with different account_ids each see only their own user."""
