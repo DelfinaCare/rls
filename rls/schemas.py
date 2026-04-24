@@ -79,12 +79,12 @@ class Policy(pydantic.BaseModel):
             ).cast(arg.type)
             args.append(wrapped_value)
 
-        compiled = self.custom_expr(*args)
+        clause_element = self.custom_expr(*args)
 
-        if not isinstance(compiled.type, sqlalchemy.Boolean):
+        if not isinstance(clause_element.type, sqlalchemy.Boolean):
             raise ValueError("Expression does not evaluate to a Boolean value")
 
-        self._expr = str(compiled.compile(compile_kwargs={"literal_binds": True}))
+        self._expr = str(clause_element.compile(compile_kwargs={"literal_binds": True}))
 
     def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
