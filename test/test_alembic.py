@@ -9,7 +9,6 @@ from alembic import config as alembic_config
 from alembic.runtime import migration
 
 from rls import alembic_rls
-from test import database
 from test import expectations
 from test import models
 
@@ -21,13 +20,15 @@ class TestAlembicOperations(unittest.TestCase):
         cls.postgresql = testing.postgresql.PostgresqlFactory(
             cache_initialized_db=True
         )()
-        cls.engine_url = database.psycopg3_url(cls.postgresql.url())
+        cls.engine_url = sqlalchemy.make_url(cls.postgresql.url()).set(
+            drivername="postgresql+psycopg"
+        )
 
         # Initialize Alembic configuration
         cls.alembic_cfg = alembic_config.Config(
             os.path.join(os.path.dirname(__file__), "./alembic.ini")
         )
-        cls.alembic_cfg.set_main_option("sqlalchemy.url", cls.engine_url)
+        cls.alembic_cfg.set_main_option("sqlalchemy.url", str(cls.engine_url))
         cls.alembic_cfg.set_main_option(
             "script_location", os.path.join(os.path.dirname(__file__), "./alembic")
         )
@@ -37,6 +38,7 @@ class TestAlembicOperations(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.admin_engine.dispose()
         cls.postgresql.stop()
 
     def test_custom_migration(self):

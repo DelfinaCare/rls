@@ -16,7 +16,7 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
-def rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
+def rls_setting(session: rls_session.RlsSession, setting_name: str) -> str | None:
     """Reads a PostgreSQL RLS session setting value."""
     return orm.Session.execute(
         session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
@@ -33,26 +33,29 @@ def rls_bypassed(session: rls_session.RlsSession) -> bool:
     raise ValueError(f"Unexpected value for bypass_rls setting: '{str_value}'")
 
 
-class TestRLSPolicies(unittest.TestCase):
+class SyncRLSTests(unittest.TestCase):
+    instance: database.TestPostgres
+    engine: sqlalchemy.engine.Engine
+
     @classmethod
     def setUpClass(cls):
         cls.instance = database.test_postgres_instance()
-        cls.admin_engine = cls.instance.admin_engine
-        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
-        cls.session_maker = orm.sessionmaker(
-            class_=rls_session.RlsSession,
-            autoflush=False,
-            autocommit=False,
-            bind=cls.instance.non_superadmin_engine,
-        )
+        cls.engine = sqlalchemy.create_engine(cls.instance.url)
 
     @classmethod
     def tearDownClass(cls):
+        cls.engine.dispose()
         cls.instance.close()
+
+    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
+        return rls_session.RlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.engine,
+        )
 
     def test_policy_creation(self):
         # Check that RLS policies exist in the database
-        with self.admin_engine.connect() as session:
+        with self.engine.connect() as session:
             # We checked for two tables at once because tablename is auto applied to policy name so we don't have to check separately
             policies = (
                 session.execute(
@@ -93,9 +96,7 @@ class TestRLSPolicies(unittest.TestCase):
     def test_rls_query_with_rls_session_and_bypass(self):
         context = models.SampleRlsContext(account_id=1)
 
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
 
         with rls_sess.begin():
             # Test Policy on table users with SELECT where (id = account_id)
@@ -114,8 +115,14 @@ class TestRLSPolicies(unittest.TestCase):
                 account_id = kwargs.get("account_id", 1)
                 return models.SampleRlsContext(account_id=account_id)
 
+        session_maker = orm.sessionmaker(
+            class_=rls_session.RlsSession,
+            autoflush=False,
+            autocommit=False,
+            bind=self.engine,
+        )
         my_sessioner = rls_sessioner.RlsSessioner(
-            sessionmaker=self.session_maker, context_getter=ExampleContextGetter()
+            sessionmaker=session_maker, context_getter=ExampleContextGetter()
         )
 
         with my_sessioner(account_id=1) as session:
@@ -125,23 +132,6 @@ class TestRLSPolicies(unittest.TestCase):
             with session.bypass_rls():
                 res = list(session.execute(_USER_ID_QUERY).scalars())
                 self.assertEqual(res, [1, 2])
-
-
-class TestRLSSessionBehavior(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
-        return rls_session.RlsSession(
-            context=models.SampleRlsContext(account_id=account_id),
-            bind=self.non_superadmin_engine,
-        )
 
     def test_bypass_rls_setting_single(self):
         """bypass_rls pg setting toggles when entering and exiting bypass context."""
@@ -260,9 +250,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_none_context_field_clears_rls_setting(self):
         """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             setting = rls_setting(rls_sess, "account_id")
             self.assertEqual(
@@ -275,9 +263,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_none_context_field_filters_results(self):
         """A nullable pydantic field set to None returns no rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -285,7 +271,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
 
     def test_none_context_returns_no_rows(self):
         """Passing context=None to RlsSession returns no rows."""
-        rls_sess = rls_session.RlsSession(context=None, bind=self.non_superadmin_engine)
+        rls_sess = rls_session.RlsSession(context=None, bind=self.engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when context is None.")
@@ -294,9 +280,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_mutable_context_change_reapplies_rls_setting(self):
         """Changing a mutable context field triggers RLS setting re-application."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(first_rows, [1])
@@ -308,9 +292,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
@@ -321,9 +303,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
     def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
@@ -407,23 +387,6 @@ class TestRLSSessionBehavior(unittest.TestCase):
             self.assertEqual(result, [1])
         rls_sess.close()
 
-
-class TestRLSWithOrmModels(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
-        return rls_session.RlsSession(
-            context=models.SampleRlsContext(account_id=account_id),
-            bind=self.non_superadmin_engine,
-        )
-
     def test_begin_sets_rls_with_user_orm(self):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
@@ -494,19 +457,7 @@ class TestRLSWithOrmModels(unittest.TestCase):
             self.assertEqual([u.id for u in users_after_flush], [1])
         rls_sess.close()
 
-
-class TestSQLInjectionProtection(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-        cls.admin_engine = cls.instance.admin_engine
-        cls.non_superadmin_engine = cls.instance.non_superadmin_engine
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    def test_malicious_context_value_does_not_execute_sql_injection(self):
+    def test_malicious_context_value_does_not_execute_sql_injection(self) -> None:
         """A malicious string value in the context is treated as a literal string
         and does not allow SQL injection through the RLS session variables."""
 
@@ -514,9 +465,7 @@ class TestSQLInjectionProtection(unittest.TestCase):
             account_id: str
 
         context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
-        rls_sess = rls_session.RlsSession(
-            context=context, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
 
         with rls_sess.begin():
             rls_sess.execute(_NOOP_QUERY)
@@ -532,7 +481,7 @@ class TestSQLInjectionProtection(unittest.TestCase):
             )
 
         # Verify the schema and its tables still exist (DROP SCHEMA was not executed)
-        with self.admin_engine.connect() as conn:
+        with self.engine.connect() as conn:
             tables = conn.execute(
                 sqlalchemy.text(
                     "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"

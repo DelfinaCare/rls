@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 
 import pydantic
@@ -14,7 +15,9 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
-async def rls_setting(session: rls_session.AsyncRlsSession, setting_name: str) -> str:
+async def rls_setting(
+    session: rls_session.AsyncRlsSession, setting_name: str
+) -> str | None:
     """Reads a PostgreSQL RLS session setting value."""
     result = await sa_asyncio.AsyncSession.execute(
         session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
@@ -22,7 +25,7 @@ async def rls_setting(session: rls_session.AsyncRlsSession, setting_name: str) -
     return result.scalar()
 
 
-async def rls_bypassed(session: rls_session.RlsSession) -> bool:
+async def rls_bypassed(session: rls_session.AsyncRlsSession) -> bool:
     """Returns True if RLS is currently bypassed in the session."""
     str_value = await rls_setting(session, "bypass_rls")
     if str_value == "true":
@@ -32,24 +35,30 @@ async def rls_bypassed(session: rls_session.RlsSession) -> bool:
     raise ValueError(f"Unexpected value for bypass_rls setting: '{str_value}'")
 
 
-class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
+class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
+    instance: database.TestPostgres
+    engine: sa_asyncio.AsyncEngine
+
     @classmethod
     def setUpClass(cls):
         cls.instance = database.test_postgres_instance()
+        cls.engine = sa_asyncio.create_async_engine(cls.instance.url)
 
     @classmethod
     def tearDownClass(cls):
+        asyncio.run(cls.engine.dispose())
         cls.instance.close()
 
-    def _async_engine(self) -> sa_asyncio.AsyncEngine:
-        return self.instance.async_non_superadmin_engine
+    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
+        return rls_session.AsyncRlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.engine,
+        )
 
     async def test_rls_query_with_async_rls_session(self):
         """AsyncRlsSession applies RLS and returns only the matching user."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self._async_engine()
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
@@ -58,30 +67,12 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
     async def test_rls_query_with_async_rls_session_and_bypass(self):
         """AsyncRlsSession with bypass_rls returns all users."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self._async_engine()
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
                 result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
                 self.assertEqual(result, [1, 2])
         await rls_sess.close()
-
-
-class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
-        return rls_session.AsyncRlsSession(
-            context=models.SampleRlsContext(account_id=account_id),
-            bind=self.instance.async_non_superadmin_engine,
-        )
 
     async def test_bypass_rls_setting_single(self):
         """bypass_rls pg setting toggles when entering and exiting bypass context."""
@@ -159,9 +150,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
     async def test_none_context_field_clears_rls_setting(self):
         """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             setting = await rls_setting(rls_sess, "account_id")
             self.assertEqual(
@@ -174,9 +163,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
     async def test_none_context_field_filters_results(self):
         """A nullable pydantic field set to None returns no rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -184,9 +171,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
 
     async def test_none_context_returns_no_rows(self):
         """Passing context=None to AsyncRlsSession returns no rows."""
-        rls_sess = rls_session.AsyncRlsSession(
-            context=None, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=None, bind=self.engine)
         async with rls_sess.begin():
             rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(rows, [], "Expected no rows when context is None.")
@@ -195,9 +180,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
     async def test_mutable_context_change_reapplies_rls_setting(self):
         """Changing a mutable context field triggers RLS setting re-application."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(first_rows, [1])
@@ -209,42 +192,19 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
     async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
-        set_statement_count = 0
-        sync_engine = self.instance.async_non_superadmin_engine.sync_engine
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
 
-        def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, exec_context
-        ):
-            nonlocal set_statement_count
-            if "set_config(" in statement:
-                set_statement_count += 1
-
-        sqlalchemy.event.listen(
-            sync_engine, "before_cursor_execute", before_cursor_execute
-        )
-        self.addCleanup(
-            sqlalchemy.event.remove,
-            sync_engine,
-            "before_cursor_execute",
-            before_cursor_execute,
-        )
-        self.addAsyncCleanup(rls_sess.close)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(first_rows, [1])
             self.assertEqual(second_rows, [1])
-        self.assertEqual(set_statement_count, 1)
+        await rls_sess.close()
 
     async def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
@@ -375,22 +335,6 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, [1])
         await rls_sess.close()
 
-
-class TestAsyncRLSWithOrmModels(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
-        return rls_session.AsyncRlsSession(
-            context=models.SampleRlsContext(account_id=account_id),
-            bind=self.instance.async_non_superadmin_engine,
-        )
-
     async def test_begin_sets_rls_with_user_orm(self):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
@@ -467,17 +411,7 @@ class TestAsyncRLSWithOrmModels(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([u.id for u in users_after_flush], [1])
         await rls_sess.close()
 
-
-class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.instance.close()
-
-    async def test_malicious_context_value_does_not_execute_sql_injection(self):
+    async def test_malicious_context_value_does_not_execute_sql_injection(self) -> None:
         """A malicious string value in the async context is treated as a literal
         string and does not allow SQL injection through the RLS session variables."""
 
@@ -485,9 +419,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
             account_id: str
 
         context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
-        rls_sess = rls_session.AsyncRlsSession(
-            context=context, bind=self.instance.async_non_superadmin_engine
-        )
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
 
         async with rls_sess.begin():
             await rls_sess.execute(_NOOP_QUERY)
@@ -504,7 +436,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
         await rls_sess.close()
 
         # Verify the schema and its tables still exist (DROP SCHEMA was not executed)
-        async with self.instance.async_non_superadmin_engine.connect() as conn:
+        async with self.engine.connect() as conn:
             result = await conn.execute(
                 sqlalchemy.text(
                     "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"

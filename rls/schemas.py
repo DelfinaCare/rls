@@ -75,10 +75,10 @@ class Policy(pydantic.BaseModel):
                 f"Length mismatch for arguments. Expected {condition_args_length}, got {lambda_args_length}"
             )
 
-    def _convert_lambda_to_clause_element(self):
+    def _convert_lambda_to_clause_element(self) -> None:
         """Convert the lambda function to a SQLAlchemy expression."""
         args = []
-        for arg in self.condition_args:
+        for arg in self.condition_args or []:
             wrapped_value = sql.func.nullif(
                 sql.func.current_setting(
                     f"{self._condition_args_prefix}.{arg.comparator_name}", True
@@ -86,12 +86,15 @@ class Policy(pydantic.BaseModel):
                 "",
             ).cast(arg.type)
             args.append(wrapped_value)
-        self._compiled_custom_expr = self.custom_expr(*args)
-        self._expr = str(
-            self._compiled_custom_expr.compile(compile_kwargs={"literal_binds": True})
-        )
+        if self.custom_expr is not None:
+            self._compiled_custom_expr = self.custom_expr(*args)
+            self._expr = str(
+                self._compiled_custom_expr.compile(
+                    compile_kwargs={"literal_binds": True}
+                )
+            )
 
-    def _get_expr_from_custom_expr(self, table_name: str):
+    def _get_expr_from_custom_expr(self, table_name: str) -> None:
         """Get the SQL expression from the custom expression with RLS prefixing."""
         if self.custom_expr is not None:
             self._validate_arguments_length()
