@@ -70,7 +70,8 @@ def test_postgres_instance() -> TestPostgres:
     inst.non_superadmin_engine = sa.create_engine(
         psycopg3_url(
             f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
-        )
+        ),
+        pool_size=40,
     )
     inst.async_non_superadmin_engine = sa_asyncio.create_async_engine(
         psycopg3_url(
