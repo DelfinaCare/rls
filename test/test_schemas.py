@@ -3,6 +3,7 @@ import unittest
 import sqlalchemy
 from sqlalchemy import sql
 
+from rls import _sql_gen
 from rls import schemas
 
 
@@ -161,7 +162,6 @@ class TestPolicyChangedChecker(unittest.TestCase):
 
     def test_matching_policies_returns_true(self):
         meta_policy = self._make_compiled_policy()
-        from rls import _sql_gen
 
         # Simulate a DB policy: single Command, expression already has bypass_rls
         db_policy = schemas.Policy(
@@ -179,7 +179,6 @@ class TestPolicyChangedChecker(unittest.TestCase):
         different_policy = self._make_compiled_policy(
             custom_expr=lambda x: sql.column("id") > x,
         )
-        from rls import _sql_gen
 
         db_policy = schemas.Policy(
             definition="PERMISSIVE",
@@ -204,7 +203,6 @@ class TestPolicyChangedChecker(unittest.TestCase):
             custom_expr=lambda x: sql.column("id") == x,
         )
         meta_policy.get_sql_policies(table_name="users")
-        from rls import _sql_gen
 
         # DB policy has PERMISSIVE definition, but meta is RESTRICTIVE
         db_policy = schemas.Policy(
@@ -223,7 +221,6 @@ class TestPolicyChangedChecker(unittest.TestCase):
             cmd=[schemas.Command.select, schemas.Command.update],
         )
         meta_policy.get_sql_policies(table_name="users")
-        from rls import _sql_gen
 
         # DB policy has single Command matching the first element of meta's list
         db_policy = schemas.Policy(
@@ -241,7 +238,6 @@ class TestPolicyChangedChecker(unittest.TestCase):
         meta_policy = self._make_compiled_policy()
         original_expr = meta_policy.expression
         original_cmd = meta_policy.cmd
-        from rls import _sql_gen
 
         db_policy = schemas.Policy(
             definition="PERMISSIVE",
