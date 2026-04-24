@@ -1,3 +1,5 @@
+import asyncio
+
 import sqlalchemy as sa
 import testing.postgresql
 from sqlalchemy import engine
@@ -20,7 +22,7 @@ class TestPostgres:
     def close(self):
         self.admin_engine.dispose()
         self.non_superadmin_engine.dispose()
-        self.async_non_superadmin_engine.sync_engine.dispose()
+        asyncio.run(self.async_non_superadmin_engine.dispose())
         self.postgresql.stop()
 
 
