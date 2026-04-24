@@ -285,9 +285,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
 
     def test_none_context_returns_no_rows(self):
         """Passing context=None to RlsSession returns no rows."""
-        rls_sess = rls_session.RlsSession(
-            context=None, bind=self.non_superadmin_engine
-        )
+        rls_sess = rls_session.RlsSession(context=None, bind=self.non_superadmin_engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when context is None.")
