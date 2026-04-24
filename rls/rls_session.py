@@ -104,6 +104,7 @@ class _RlsSessionMixin:
             for key in self._rls_context_keys
         }
 
+
 class BypassRLSContext:
     def __init__(self, session: "RlsSession"):
         self.session = session
