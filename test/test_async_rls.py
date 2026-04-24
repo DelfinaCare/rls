@@ -53,6 +53,7 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
         async with rls_sess.begin():
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
+        await rls_sess.close()
 
     async def test_rls_query_with_async_rls_session_and_bypass(self):
         """AsyncRlsSession with bypass_rls returns all users."""
@@ -64,6 +65,7 @@ class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
             async with rls_sess.bypass_rls():
                 result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
                 self.assertEqual(result, [1, 2])
+        await rls_sess.close()
 
 
 class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
