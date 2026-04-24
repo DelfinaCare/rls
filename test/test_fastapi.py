@@ -1,7 +1,7 @@
-import concurrent.futures
-import threading
+import asyncio
 import unittest
 
+import httpx
 from fastapi import testclient
 
 from test import fastapi_sample
@@ -29,42 +29,39 @@ class FastapiTest(unittest.TestCase):
         self.assertEqual(response.json(), ["user1", "user2"])
 
     def test_concurrent_requests(self):
-        total = 75
-        barrier = threading.Barrier(total)
+        async def run():
+            barrier = asyncio.Barrier(75)
 
-        def make_request(path, params, expected):
-            barrier.wait()
-            response = self.client.get(path, params=params)
-            return response.status_code, response.json(), expected
+            async def make_request(client, path, params, expected):
+                await barrier.wait()
+                response = await client.get(path, params=params)
+                return response.status_code, response.json(), expected
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=total) as executor:
-            futures = []
-            for _ in range(25):
-                futures.append(
-                    executor.submit(
-                        make_request, "/users", {"account_id": 1}, ["user1"]
+            transport = httpx.ASGITransport(app=fastapi_sample.app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                tasks = []
+                for _ in range(25):
+                    tasks.append(
+                        make_request(client, "/users", {"account_id": 1}, ["user1"])
                     )
-                )
-            for _ in range(25):
-                futures.append(
-                    executor.submit(
-                        make_request, "/users", {"account_id": 2}, ["user2"]
+                for _ in range(25):
+                    tasks.append(
+                        make_request(client, "/users", {"account_id": 2}, ["user2"])
                     )
-                )
-            for _ in range(25):
-                futures.append(
-                    executor.submit(
-                        make_request,
-                        "/all_users",
-                        None,
-                        ["user1", "user2"],
+                for _ in range(25):
+                    tasks.append(
+                        make_request(
+                            client, "/all_users", None, ["user1", "user2"]
+                        )
                     )
-                )
+                return await asyncio.gather(*tasks)
 
-            for future in concurrent.futures.as_completed(futures):
-                status_code, body, expected = future.result()
-                self.assertEqual(status_code, 200)
-                self.assertEqual(body, expected)
+        results = asyncio.run(run())
+        for status_code, body, expected in results:
+            self.assertEqual(status_code, 200)
+            self.assertEqual(body, expected)
 
 
 if __name__ == "__main__":
