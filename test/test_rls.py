@@ -283,6 +283,16 @@ class TestRLSSessionBehavior(unittest.TestCase):
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         rls_sess.close()
 
+    def test_none_context_returns_no_rows(self):
+        """Passing context=None to RlsSession returns no rows."""
+        rls_sess = rls_session.RlsSession(
+            context=None, bind=self.non_superadmin_engine
+        )
+        with rls_sess.begin():
+            rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(rows, [], "Expected no rows when context is None.")
+        rls_sess.close()
+
     def test_mutable_context_change_reapplies_rls_setting(self):
         """Changing a mutable context field triggers RLS setting re-application."""
         context = models.SampleRlsContext(account_id=1)
