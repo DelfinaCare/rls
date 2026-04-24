@@ -16,11 +16,21 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
-def get_pg_rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
+def rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
     """Reads a PostgreSQL RLS session setting value."""
     return orm.Session.execute(
         session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
     ).scalar()
+
+
+def rls_bypassed(session: rls_session.RlsSession) -> bool:
+    """Returns True if RLS is currently bypassed in the session."""
+    str_value = rls_setting(session, "bypass_rls")
+    if str_value == "true":
+        return True
+    if str_value == "false":
+        return False
+    raise ValueError(f"Unexpected value for bypass_rls setting: '{str_value}'")
 
 
 class TestRLSPolicies(unittest.TestCase):
@@ -133,32 +143,18 @@ class TestRLSSessionBehavior(unittest.TestCase):
             bind=self.non_superadmin_engine,
         )
 
-    def test_bypass_rls_default_false(self):
-        """bypass_rls pg setting is falsy before entering a bypass context."""
+    def test_bypass_rls_setting_single(self):
+        """bypass_rls pg setting toggles when entering and exiting bypass context."""
         rls_sess = self._new_session()
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
-        rls_sess.close()
-
-    def test_bypass_rls_active_inside_context(self):
-        """bypass_rls pg setting is 'true' while inside the bypass_rls context."""
-        rls_sess = self._new_session()
-        with rls_sess.begin():
+            self.assertFalse(rls_bypassed(rls_sess))
+            rls_sess.execute(_NOOP_QUERY)
+            self.assertFalse(rls_bypassed(rls_sess))
             with rls_sess.bypass_rls():
                 rls_sess.execute(_NOOP_QUERY)
-                setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-                self.assertEqual(setting, "true")
-        rls_sess.close()
-
-    def test_bypass_rls_restored_after_exit(self):
-        """bypass_rls pg setting is restored to false after exiting the context."""
-        rls_sess = self._new_session()
-        with rls_sess.begin():
-            with rls_sess.bypass_rls():
-                pass
-            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+                self.assertTrue(rls_bypassed(rls_sess))
+            rls_sess.execute(_NOOP_QUERY)
+            self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
     def test_exception_during_bypass_propagates(self):
@@ -189,8 +185,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
     def test_nested_bypass_rls(self):
@@ -199,13 +194,12 @@ class TestRLSSessionBehavior(unittest.TestCase):
         with rls_sess.begin():
             with rls_sess.bypass_rls():
                 rls_sess.execute(_NOOP_QUERY)
-                self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+                self.assertTrue(rls_bypassed(rls_sess))
                 with rls_sess.bypass_rls():
-                    self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
-                self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+                    self.assertTrue(rls_bypassed(rls_sess))
+                self.assertTrue(rls_bypassed(rls_sess))
             rls_sess.execute(_NOOP_QUERY)
-            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
     def test_python_exception_during_bypass_restores_state(self):
@@ -217,8 +211,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
                     raise ValueError("Test")
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
     def test_multiple_sessions_bypass_isolated(self):
@@ -247,6 +240,16 @@ class TestRLSSessionBehavior(unittest.TestCase):
                         [2],
                         "Non-bypassed session should see only its account's user.",
                     )
+                    # Now both are bypassed
+                    with rls_sess2.bypass_rls():
+                        result1_bypass = list(
+                            rls_sess1.execute(_USER_ID_QUERY).scalars()
+                        )
+                        result2_bypass = list(
+                            rls_sess2.execute(_USER_ID_QUERY).scalars()
+                        )
+                        self.assertEqual(result1_bypass, [1, 2])
+                        self.assertEqual(result2_bypass, [1, 2])
 
                 # After bypass exits, session1 is restricted again
                 result1_after = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
@@ -261,7 +264,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
             context=context, bind=self.non_superadmin_engine
         )
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "account_id")
+            setting = rls_setting(rls_sess, "account_id")
             self.assertEqual(
                 setting,
                 "",
@@ -355,23 +358,21 @@ class TestRLSSessionBehavior(unittest.TestCase):
         with rls_sess.bypass_rls():
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1, 2])
-            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            self.assertTrue(rls_bypassed(rls_sess))
             rls_sess.commit()
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1, 2])
-            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            self.assertTrue(rls_bypassed(rls_sess))
         result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
         self.assertEqual(result, [1])
-        setting = get_pg_rls_setting(rls_sess, "bypass_rls")
-        self.assertIn(setting, {"", None, "false"})
+        self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
     def test_begin_sets_rls_account_id_setting(self):
         """begin() sets the rls.account_id pg setting to the context value."""
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
         rls_sess.close()
 
     def test_scalar_sets_rls_settings(self):
@@ -393,8 +394,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
             rls_sess.flush()
-            setting = get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
         rls_sess.close()
@@ -420,8 +420,7 @@ class TestRLSWithOrmModels(unittest.TestCase):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
-            setting = get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             users = list(
                 rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -478,8 +477,7 @@ class TestRLSWithOrmModels(unittest.TestCase):
             )
             self.assertEqual([u.id for u in users], [1])
             rls_sess.flush()
-            setting = get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             users_after_flush = list(
                 rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
