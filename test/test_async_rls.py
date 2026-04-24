@@ -224,7 +224,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
 
     async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
-        context = models.ImmutableSampleRlsContext(account_id=1)
+        context = models.ImmutableEqGuardRlsContext(account_id=1)
         rls_sess = rls_session.AsyncRlsSession(
             context=context, bind=self.instance.async_non_superadmin_engine
         )
