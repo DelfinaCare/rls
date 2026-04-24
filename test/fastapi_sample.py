@@ -3,6 +3,7 @@ import contextlib
 import fastapi
 import sqlalchemy as sa
 import starlette.requests
+from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import rls_session
 from rls import rls_sessioner
@@ -34,11 +35,24 @@ demo_sessioner = fastapi.Depends(
     )
 )
 
+# Async variant using AsyncRlsSession.
+async_session_maker = sa_asyncio.async_sessionmaker(
+    class_=rls_session.AsyncRlsSession, autoflush=False, autocommit=False
+)
+async_demo_sessioner = fastapi.Depends(
+    rls_sessioner.async_fastapi_dependency_function(
+        rls_sessioner.AsyncRlsSessioner(
+            sessionmaker=async_session_maker, context_getter=SampleContextGetter()
+        )
+    )
+)
+
 
 @contextlib.asynccontextmanager
 async def sample_database_setup(app: fastapi.FastAPI):
     test_db = database.test_postgres_instance()
     session_maker.configure(bind=test_db.non_superadmin_engine)
+    async_session_maker.configure(bind=test_db.async_non_superadmin_engine)
     yield
     test_db.close()
 
@@ -66,6 +80,28 @@ def get_all_users(
     data = list(result)
     db.close()
     return data
+
+
+@app.get("/async/users")
+async def async_get_users(
+    db: rls_session.AsyncRlsSession = async_demo_sessioner,
+    account_id: int | None = None,
+) -> list[str]:
+    del account_id
+    # This query will already have the rls context set from the request.
+    result = (await db.execute(sa.select(models.User.username))).scalars()
+    return list(result)
+
+
+@app.get("/async/all_users")
+async def async_get_all_users(
+    db: rls_session.AsyncRlsSession = async_demo_sessioner,
+    account_id: int | None = None,
+) -> list[str]:
+    del account_id
+    async with db.bypass_rls():
+        result = list((await db.execute(sa.select(models.User.username))).scalars())
+    return result
 
 
 if __name__ == "__main__":
