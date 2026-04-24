@@ -13,10 +13,12 @@ from test import models
 class SampleContextGetter(rls_sessioner.ContextGetter):
     """This is needed to generate the RLS context for each request."""
 
-    def get_context(self, *args, **kwargs) -> models.SampleRlsContext:
-        request: starlette.requests.Request = kwargs.get("request")
+    def get_context(
+        self, request: starlette.requests.Request
+    ) -> models.SampleRlsContext:
+        account_id_param = request.query_params.get("account_id")
         return models.SampleRlsContext(
-            account_id=request.query_params.get("account_id")
+            account_id=int(account_id_param) if account_id_param is not None else None
         )
 
 

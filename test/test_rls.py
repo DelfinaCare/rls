@@ -13,6 +13,7 @@ from test import models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
+_NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
 def get_pg_rls_setting(session: rls_session.RlsSession, setting_name: str) -> str:
@@ -145,6 +146,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = self._new_session()
         with rls_sess.begin():
             with rls_sess.bypass_rls():
+                rls_sess.execute(_NOOP_QUERY)
                 setting = get_pg_rls_setting(rls_sess, "bypass_rls")
                 self.assertEqual(setting, "true")
         rls_sess.close()
@@ -184,7 +186,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
                 with rls_sess.bypass_rls():
                     rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
         # _rls_bypass flag must be cleared regardless of exception
-        self.assertFalse(rls_sess._rls_bypass)
+        self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
         with rls_sess.begin():
             setting = get_pg_rls_setting(rls_sess, "bypass_rls")
@@ -196,10 +198,12 @@ class TestRLSSessionBehavior(unittest.TestCase):
         rls_sess = self._new_session()
         with rls_sess.begin():
             with rls_sess.bypass_rls():
+                rls_sess.execute(_NOOP_QUERY)
                 self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
                 with rls_sess.bypass_rls():
                     self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
                 self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            rls_sess.execute(_NOOP_QUERY)
             setting = get_pg_rls_setting(rls_sess, "bypass_rls")
             self.assertIn(setting, {"", None, "false"})
         rls_sess.close()
@@ -211,7 +215,7 @@ class TestRLSSessionBehavior(unittest.TestCase):
             with rls_sess.begin():
                 with rls_sess.bypass_rls():
                     raise ValueError("Test")
-        self.assertFalse(rls_sess._rls_bypass)
+        self.assertEqual(rls_sess._rls_bypass_depth, 0)
         with rls_sess.begin():
             setting = get_pg_rls_setting(rls_sess, "bypass_rls")
             self.assertIn(setting, {"", None, "false"})
@@ -349,7 +353,6 @@ class TestRLSSessionBehavior(unittest.TestCase):
         """bypass_rls state persists across commit within the bypass context."""
         rls_sess = self._new_session()
         with rls_sess.bypass_rls():
-            self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1, 2])
             self.assertEqual(get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
@@ -510,7 +513,7 @@ class TestSQLInjectionProtection(unittest.TestCase):
         )
 
         with rls_sess.begin():
-            rls_sess.execute(sqlalchemy.text("SELECT 1"))
+            rls_sess.execute(_NOOP_QUERY)
 
             # Verify the malicious payload was stored as a literal string, not executed
             stored_value = rls_sess.execute(

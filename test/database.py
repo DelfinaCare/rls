@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 import testing.postgresql
-from sqlalchemy.engine import make_url
+from sqlalchemy import engine
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 from test import models
@@ -8,7 +8,7 @@ from test import models
 
 def psycopg3_url(url: str) -> str:
     """Convert a postgresql:// URL to use the psycopg3 dialect."""
-    return str(make_url(url).set(drivername="postgresql+psycopg"))
+    return str(engine.make_url(url).set(drivername="postgresql+psycopg"))
 
 
 class TestPostgres:

@@ -6,6 +6,56 @@ from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 
+def _is_context_immutable(context: pydantic.BaseModel | None) -> bool:
+    if context is None:
+        return True
+    model_config = getattr(type(context), "model_config", None)
+    if model_config is None:
+        return False
+    return bool(model_config.get("frozen"))
+
+
+def _context_to_value_params(
+    context: pydantic.BaseModel | None, keys: list[str]
+) -> dict[str, str]:
+    if context is None or not keys:
+        return {}
+    return {
+        f"value_{key}": "" if (x := getattr(context, key)) is None else str(x)
+        for key in keys
+    }
+
+
+def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
+    """
+    Pre-computes the SQL template for setting RLS config values at init time.
+
+    The SQLAlchemy select() expression with literal setting names and named
+    bind parameters for the values is built once and stored.  Each call to
+    _get_set_statement() then only needs to substitute the current field
+    values into this template, which is significantly cheaper than rebuilding
+    the entire statement every time.
+    """
+    set_config_calls = [
+        sqlalchemy.func.set_config(
+            sqlalchemy.literal("rls.bypass_rls"),
+            sqlalchemy.literal("false"),
+            sqlalchemy.false(),
+        )
+    ]
+    for key in keys:
+        # Bind parameters are named after the field (e.g. setting_account_id,
+        # value_account_id) so the mapping is explicit and not order-dependent.
+        set_config_calls.append(
+            sqlalchemy.func.set_config(
+                sqlalchemy.literal(f"rls.{key}"),
+                sqlalchemy.bindparam(f"value_{key}"),
+                sqlalchemy.false(),
+            )
+        )
+    return sqlalchemy.select(*set_config_calls)
+
+
 class _RlsSessionMixin:
     """Shared logic for RlsSession and AsyncRlsSession."""
 
@@ -13,122 +63,81 @@ class _RlsSessionMixin:
         super().__init__(*args, **kwargs)
         self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
         self._rls_dirty = True
-        self._rls_set_template: sqlalchemy.Select | None = None
-        self._rls_context_keys: list[str] = []
         self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
-        self._rls_context_is_immutable = False
-        self.context = context
-        if context is not None:
-            self._rls_context_is_immutable = self._is_context_immutable(context)
-            self._precompute_set_template()
+        self._context = context
+        self._rls_context_is_immutable = _is_context_immutable(context)
+        self._rls_context_keys: list[str] = (
+            list(type(self._context).model_fields.keys()) if self._context else []
+        )
+        self._rls_set_template = _set_statement_template(self._rls_context_keys)
 
-    @property
-    def _rls_bypass(self) -> bool:
-        return self._rls_bypass_depth > 0
-
-    @staticmethod
-    def _is_context_immutable(context: pydantic.BaseModel) -> bool:
-        model_config = getattr(type(context), "model_config", None)
-        if model_config is None:
-            return False
-        return bool(model_config.get("frozen"))
-
-    def _precompute_set_template(self) -> None:
+    def _get_set_statement(self) -> sqlalchemy.ClauseElement | None:
         """
-        Pre-computes the SQL template for setting RLS config values at init time.
-
-        The SQLAlchemy select() expression with literal setting names and named
-        bind parameters for the values is built once and stored.  Each call to
-        _get_set_statements() then only needs to substitute the current field
-        values into this template, which is significantly cheaper than rebuilding
-        the entire statement every time.
-        """
-        if self.context is None:
-            raise ValueError("_precompute_set_template called with no context")
-        keys = list(type(self.context).model_fields.keys())
-        if not keys:
-            return
-
-        set_config_calls = []
-        for key in keys:
-            # Bind parameters are named after the field (e.g. setting_account_id,
-            # value_account_id) so the mapping is explicit and not order-dependent.
-            set_config_calls.append(
-                sqlalchemy.func.set_config(
-                    sqlalchemy.literal(f"rls.{key}"),
-                    sqlalchemy.bindparam(f"value_{key}"),
-                    sqlalchemy.false(),
-                )
-            )
-
-        self._rls_context_keys = keys
-        self._rls_set_template = sqlalchemy.select(*set_config_calls)
-
-    def _get_set_statements(self):
-        """
-        Returns a single SQL statement to set all RLS config values.
+        Returns the SQL statement to set all RLS config values.
 
         The SQL template was pre-computed at init time; here we only substitute
         the current field values.  None values are stored as an empty string so
         that the RLS policy expressions (which wrap current_setting() with
         NULLIF(..., '')) treat them as NULL and filter out all rows.
         """
-        if self.context is None or self._rls_bypass or self._rls_set_template is None:
-            return []
-
+        if self._rls_bypass_depth > 0:
+            if self._rls_dirty:
+                return sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
+            return None
         if not self._rls_dirty:
-            if (
-                self._rls_last_set_context_snapshot is not None
-                and self._rls_context_is_immutable
-            ):
-                return []
-            if self.context == self._rls_last_set_context_snapshot:
-                return []
-
-        # Only value substitution happens here — the template with literal setting
-        # names was already built during _precompute_set_template().
-        value_params = self._build_rls_value_params()
-
-        # Keep an isolated deep snapshot so nested mutable fields changed in-place
-        # are detected by equality checks on subsequent calls.
-        self._rls_last_set_context_snapshot = self.context.model_copy(deep=True)
-        return [self._rls_set_template.params(**value_params)]
-
-    def _build_rls_value_params(self) -> dict[str, str]:
-        if self.context is None:
-            return {}
-        return {
-            f"value_{key}": ""
-            if getattr(self.context, key) is None
-            else str(getattr(self.context, key))
-            for key in self._rls_context_keys
-        }
+            if self._rls_context_is_immutable:
+                return None
+            if self._context == self._rls_last_set_context_snapshot:
+                return None
+        self._rls_last_set_context_snapshot = (
+            self._context.model_copy(deep=True) if self._context else None
+        )
+        value_params = _context_to_value_params(
+            self._rls_last_set_context_snapshot, self._rls_context_keys
+        )
+        return self._rls_set_template.params(**value_params)
 
 
 class BypassRLSContext:
     def __init__(self, session: "RlsSession"):
         self.session = session
-        self._is_outermost = False
 
     def __enter__(self):
-        self._is_outermost = self.session._rls_bypass_depth == 0
+        is_outermost = self.session._rls_bypass_depth == 0
         self.session._rls_bypass_depth += 1
-        if self._is_outermost:
-            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
+        if is_outermost:
+            self.session._rls_dirty = True
         return self.session
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.session._rls_bypass_depth -= 1
-        if exc_type is not None:
-            if self._is_outermost:
-                self.session._rls_bypass_depth = 0
-                self.session.rollback()
-            return
-        if self._is_outermost:
-            self.session.execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = false;"))
+        is_outermost = self.session._rls_bypass_depth == 0
+        if exc_type is not None and is_outermost:
+            self.session.rollback()
+            self.session._rls_bypass_depth = 0
+        if is_outermost:
+            self.session._rls_dirty = True
 
-    def execute(self, *args, **kwargs):
-        return self.session.execute(*args, **kwargs)
+
+class AsyncBypassRLSContext:
+    def __init__(self, session: "AsyncRlsSession"):
+        self.session = session
+
+    async def __aenter__(self):
+        is_outermost = self.session._rls_bypass_depth == 0
+        self.session._rls_bypass_depth += 1
+        if is_outermost:
+            self.session._rls_dirty = True
+        return self.session
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.session._rls_bypass_depth -= 1
+        is_outermost = self.session._rls_bypass_depth == 0
+        if exc_type is not None and is_outermost:
+            await self.session.rollback()
+            self.session._rls_bypass_depth = 0
+        if is_outermost:
+            self.session._rls_dirty = True
 
 
 class RlsSession(_RlsSessionMixin, orm.Session):
@@ -136,17 +145,8 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         """
         Executes the RLS SET statements unless bypassing RLS.
         """
-        if self._rls_bypass:
-            # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_dirty:
-                self._rls_dirty = False
-                super().execute(sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"))
-            # Always skip normal RLS context settings when bypassing.
-            return
-        set_statements = self._get_set_statements()
-        for stmt in set_statements:
+        if (stmt := self._get_set_statement()) is not None:
             super().execute(stmt)
-        if set_statements:
             self._rls_dirty = False
 
     @contextlib.contextmanager
@@ -188,51 +188,13 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         return BypassRLSContext(self)
 
 
-class AsyncBypassRLSContext:
-    def __init__(self, session: "AsyncRlsSession"):
-        self.session = session
-        self._is_outermost = False
-
-    async def __aenter__(self):
-        self._is_outermost = self.session._rls_bypass_depth == 0
-        self.session._rls_bypass_depth += 1
-        if self._is_outermost:
-            await self.session.execute(
-                sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
-            )
-        return self.session
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.session._rls_bypass_depth -= 1
-        if exc_type is not None:
-            if self._is_outermost:
-                self.session._rls_bypass_depth = 0
-                await self.session.rollback()
-            return
-        if self._is_outermost:
-            await self.session.execute(
-                sqlalchemy.text("SET LOCAL rls.bypass_rls = false;")
-            )
-
-
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):
         """
         Executes the RLS SET statements unless bypassing RLS.
         """
-        if self._rls_bypass:
-            # Re-apply the bypass flag if a commit cleared it since the last command.
-            if self._rls_dirty:
-                self._rls_dirty = False
-                await super().execute(
-                    sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
-                )
-            # Always skip normal RLS context settings when bypassing.
-            return
-        set_statements = self._get_set_statements()
-        for stmt in set_statements:
+        if (stmt := self._get_set_statement()) is not None:
             await super().execute(stmt)
-        if set_statements:
             self._rls_dirty = False
 
     @contextlib.asynccontextmanager
