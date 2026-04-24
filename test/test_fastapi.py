@@ -44,6 +44,7 @@ class FastapiAsyncTest(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(
                 transport=transport,
                 base_url="http://test",
+                timeout=5.0,
             ) as client:
                 tasks = []
                 for _ in range(n):

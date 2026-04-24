@@ -51,7 +51,9 @@ def get_users(db=demo_sessioner, account_id: int | None = None) -> list[str]:
     del account_id
     # This query will already have the rls context set from the request.
     result = db.execute(sa.select(models.User.username)).scalars()
-    return list(result)
+    data = list(result)
+    db.close()
+    return data
 
 
 @app.get("/all_users")
@@ -61,7 +63,9 @@ def get_all_users(
     del account_id
     with db.bypass_rls():
         result = list(db.execute(sa.select(models.User.username)).scalars())
-    return list(result)
+    data = list(result)
+    db.close()
+    return data
 
 
 if __name__ == "__main__":
