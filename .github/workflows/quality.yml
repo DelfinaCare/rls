@@ -27,7 +27,7 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
       - name: Run Mypy
-        run: mypy rls/
+        run: mypy .
   unit-tests:
     runs-on: ubuntu-latest
     strategy:

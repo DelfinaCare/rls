@@ -73,7 +73,7 @@ class _RlsSessionMixin:
         )
         self._rls_set_template = _set_statement_template(self._rls_context_keys)
 
-    def _get_set_statement(self) -> sqlalchemy.ClauseElement | None:
+    def _get_set_statement(self) -> sqlalchemy.Executable | None:
         """
         Returns the SQL statement to set all RLS config values.
 
@@ -201,9 +201,9 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
 
     @contextlib.asynccontextmanager
     async def begin(self):
-        async with super().begin():
+        async with super().begin() as transaction:
             await self._execute_set_statements()
-            yield self
+            yield transaction
 
     async def execute(self, *args, **kwargs):
         """

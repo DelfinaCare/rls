@@ -2,8 +2,8 @@ import abc
 import contextlib
 import typing
 
-import fastapi
 import pydantic
+import starlette.requests
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
@@ -72,7 +72,7 @@ class AsyncRlsSessioner:
 
 
 def fastapi_dependency_function(sessioner: RlsSessioner):
-    def dependency_function(request: fastapi.Request):
+    def dependency_function(request: starlette.requests.Request):
         with sessioner(request=request) as session:
             yield session
 
@@ -80,7 +80,7 @@ def fastapi_dependency_function(sessioner: RlsSessioner):
 
 
 def async_fastapi_dependency_function(sessioner: AsyncRlsSessioner):
-    async def dependency_function(request: fastapi.Request):
+    async def dependency_function(request: starlette.requests.Request):
         async with sessioner(request=request) as session:
             yield session
 

@@ -51,9 +51,13 @@ async_demo_sessioner = fastapi.Depends(
 @contextlib.asynccontextmanager
 async def sample_database_setup(app: fastapi.FastAPI):
     test_db = database.test_postgres_instance()
-    session_maker.configure(bind=test_db.non_superadmin_engine)
-    async_session_maker.configure(bind=test_db.async_non_superadmin_engine)
+    sync_engine = sa.create_engine(test_db.url)
+    async_engine = sa_asyncio.create_async_engine(test_db.url)
+    session_maker.configure(bind=sync_engine)
+    async_session_maker.configure(bind=async_engine)
     yield
+    sync_engine.dispose()
+    await async_engine.dispose()
     test_db.close()
 
 

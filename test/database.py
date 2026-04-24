@@ -1,26 +1,17 @@
 import sqlalchemy as sa
 import testing.postgresql
-from sqlalchemy import engine
-from sqlalchemy.ext import asyncio as sa_asyncio
 
 from test import models
-
-
-def psycopg3_url(url: str) -> str:
-    """Convert a postgresql:// URL to use the psycopg3 dialect."""
-    return str(engine.make_url(url).set(drivername="postgresql+psycopg"))
 
 
 class TestPostgres:
     postgresql: testing.postgresql.Postgresql
     admin_engine: sa.engine.Engine
-    non_superadmin_engine: sa.engine.Engine
-    async_non_superadmin_engine: sa_asyncio.AsyncEngine
+    url: sa.engine.URL
+    admin_url: sa.engine.URL
 
-    def close(self):
+    def close(self) -> None:
         self.admin_engine.dispose()
-        self.non_superadmin_engine.dispose()
-        self.async_non_superadmin_engine.sync_engine.dispose()
         self.postgresql.stop()
 
 
@@ -28,7 +19,10 @@ def test_postgres_instance() -> TestPostgres:
     """Returns a test postgres instance seeded with data."""
     inst = TestPostgres()
     inst.postgresql = testing.postgresql.Postgresql()
-    inst.admin_engine = sa.create_engine(psycopg3_url(inst.postgresql.url()))
+    inst.admin_url = sa.engine.make_url(inst.postgresql.url()).set(
+        drivername="postgresql+psycopg"
+    )
+    inst.admin_engine = sa.create_engine(inst.admin_url)
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
 
@@ -65,16 +59,7 @@ def test_postgres_instance() -> TestPostgres:
                                     """)
         )
     connection.close()
-
-    # Create the engine with the non-superadmin user's credentials
-    inst.non_superadmin_engine = sa.create_engine(
-        psycopg3_url(
-            f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
-        ),
-    )
-    inst.async_non_superadmin_engine = sa_asyncio.create_async_engine(
-        psycopg3_url(
-            f"postgresql://{non_superadmin_user}:{password}@{host}:{port}/{database}"
-        )
+    inst.url = sa.engine.make_url(
+        f"postgresql+psycopg://{non_superadmin_user}:{password}@{host}:{port}/{database}"
     )
     return inst
