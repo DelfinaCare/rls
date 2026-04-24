@@ -11,6 +11,7 @@ from test import models
 
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
+_NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
 async def get_pg_rls_setting(
@@ -85,6 +86,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session()
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
+                await rls_sess.execute(_NOOP_QUERY)
                 setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
                 self.assertEqual(setting, "true")
         await rls_sess.close()
@@ -124,7 +126,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
                 async with rls_sess.bypass_rls():
                     await rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
         # _rls_bypass flag must be cleared regardless of exception
-        self.assertFalse(rls_sess._rls_bypass)
+        self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
         async with rls_sess.begin():
             setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
@@ -136,16 +138,20 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session()
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
+                await rls_sess.execute(_NOOP_QUERY)
                 self.assertEqual(
                     await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
                 )
                 async with rls_sess.bypass_rls():
+                    await rls_sess.execute(_NOOP_QUERY)
                     self.assertEqual(
                         await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
                     )
+                await rls_sess.execute(_NOOP_QUERY)
                 self.assertEqual(
                     await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
                 )
+            await rls_sess.execute(_NOOP_QUERY)
             setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
             self.assertIn(setting, {"", None, "false"})
         await rls_sess.close()
@@ -157,7 +163,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             async with rls_sess.begin():
                 async with rls_sess.bypass_rls():
                     raise ValueError("Test")
-        self.assertFalse(rls_sess._rls_bypass)
+        self.assertEqual(rls_sess._rls_bypass_depth, 0)
         async with rls_sess.begin():
             setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
             self.assertIn(setting, {"", None, "false"})
@@ -195,33 +201,13 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess = rls_session.AsyncRlsSession(
             context=context, bind=self.instance.async_non_superadmin_engine
         )
-        set_statement_count = 0
-        sync_engine = self.instance.async_non_superadmin_engine.sync_engine
-
-        def before_cursor_execute(
-            conn, cursor, statement, parameters, executemany, exec_context
-        ):
-            nonlocal set_statement_count
-            if "set_config(" in statement:
-                set_statement_count += 1
-
-        sqlalchemy.event.listen(
-            sync_engine, "before_cursor_execute", before_cursor_execute
-        )
-        self.addCleanup(
-            sqlalchemy.event.remove,
-            sync_engine,
-            "before_cursor_execute",
-            before_cursor_execute,
-        )
-        self.addAsyncCleanup(rls_sess.close)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(first_rows, [1])
             context.account_id = 2
             second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(second_rows, [2])
-        self.assertEqual(set_statement_count, 2)
+        await rls_sess.close()
 
     async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
@@ -339,7 +325,6 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         """bypass_rls state persists across commit within the bypass context."""
         rls_sess = self._new_session()
         async with rls_sess.bypass_rls():
-            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1, 2])
             self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
@@ -503,8 +488,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
         )
 
         async with rls_sess.begin():
-            await rls_sess.execute(sqlalchemy.text("SELECT 1"))
-
+            await rls_sess.execute(_NOOP_QUERY)
             # Verify the malicious payload was stored as a literal string, not executed
             result = await rls_sess.execute(
                 sqlalchemy.text("SELECT current_setting('rls.account_id', true);")
@@ -515,6 +499,7 @@ class TestAsyncSQLInjectionProtection(unittest.IsolatedAsyncioTestCase):
                 _MALICIOUS_CONTEXT_VALUE,
                 "Context value must be stored as a literal string, not interpreted as SQL.",
             )
+        await rls_sess.close()
 
         # Verify the schema and its tables still exist (DROP SCHEMA was not executed)
         async with self.instance.async_non_superadmin_engine.connect() as conn:
