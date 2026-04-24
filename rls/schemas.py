@@ -29,7 +29,7 @@ class ConditionArg(pydantic.BaseModel):
 def compile_custom_expr(
     table_name: str,
     condition_args: list[ConditionArg] | None,
-    custom_expr: typing.Callable[..., elements.ClauseElement] | None,
+    custom_expr: typing.Callable[..., elements.ColumnElement] | None,
 ) -> str:
     """Validate and compile a custom expression into a SQL string.
 
@@ -88,7 +88,7 @@ class Policy(pydantic.BaseModel):
     definition: str
     condition_args: list[ConditionArg] | None = None
     cmd: Command | list[Command]
-    custom_expr: typing.Callable[..., elements.ClauseElement] | None = None
+    custom_expr: typing.Callable[..., elements.ColumnElement] | None = None
     custom_policy_name: str | None = None
 
     _policy_names: list[str] = pydantic.PrivateAttr(default_factory=list)
