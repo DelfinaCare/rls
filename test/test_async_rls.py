@@ -14,14 +14,22 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
-async def get_pg_rls_setting(
-    session: rls_session.AsyncRlsSession, setting_name: str
-) -> str:
+async def rls_setting(session: rls_session.AsyncRlsSession, setting_name: str) -> str:
     """Reads a PostgreSQL RLS session setting value."""
     result = await sa_asyncio.AsyncSession.execute(
         session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
     )
     return result.scalar()
+
+
+async def rls_bypassed(session: rls_session.RlsSession) -> bool:
+    """Returns True if RLS is currently bypassed in the session."""
+    str_value = await rls_setting(session, "bypass_rls")
+    if str_value == "true":
+        return True
+    if str_value == "false":
+        return False
+    raise ValueError(f"Unexpected value for bypass_rls setting: '{str_value}'")
 
 
 class TestAsyncRLSPolicies(unittest.IsolatedAsyncioTestCase):
@@ -73,32 +81,18 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             bind=self.instance.async_non_superadmin_engine,
         )
 
-    async def test_bypass_rls_default_false(self):
-        """bypass_rls pg setting is falsy before entering a bypass context."""
+    async def test_bypass_rls_setting_single(self):
+        """bypass_rls pg setting toggles when entering and exiting bypass context."""
         rls_sess = self._new_session()
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
-        await rls_sess.close()
-
-    async def test_bypass_rls_active_inside_context(self):
-        """bypass_rls pg setting is 'true' while inside the bypass_rls context."""
-        rls_sess = self._new_session()
-        async with rls_sess.begin():
+            self.assertFalse(await rls_bypassed(rls_sess))
+            await rls_sess.execute(_NOOP_QUERY)
+            self.assertFalse(await rls_bypassed(rls_sess))
             async with rls_sess.bypass_rls():
                 await rls_sess.execute(_NOOP_QUERY)
-                setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-                self.assertEqual(setting, "true")
-        await rls_sess.close()
-
-    async def test_bypass_rls_restored_after_exit(self):
-        """bypass_rls pg setting is restored to false after exiting the context."""
-        rls_sess = self._new_session()
-        async with rls_sess.begin():
-            async with rls_sess.bypass_rls():
-                pass
-            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+                self.assertTrue(await rls_bypassed(rls_sess))
+            await rls_sess.execute(_NOOP_QUERY)
+            self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
     async def test_exception_during_bypass_propagates(self):
@@ -129,8 +123,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
     async def test_nested_bypass_rls(self):
@@ -139,21 +132,14 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
                 await rls_sess.execute(_NOOP_QUERY)
-                self.assertEqual(
-                    await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
-                )
+                self.assertTrue(await rls_bypassed(rls_sess))
                 async with rls_sess.bypass_rls():
                     await rls_sess.execute(_NOOP_QUERY)
-                    self.assertEqual(
-                        await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
-                    )
+                    self.assertTrue(await rls_bypassed(rls_sess))
                 await rls_sess.execute(_NOOP_QUERY)
-                self.assertEqual(
-                    await get_pg_rls_setting(rls_sess, "bypass_rls"), "true"
-                )
+                self.assertTrue(await rls_bypassed(rls_sess))
             await rls_sess.execute(_NOOP_QUERY)
-            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
     async def test_python_exception_during_bypass_restores_state(self):
@@ -165,8 +151,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
                     raise ValueError("Test")
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-            self.assertIn(setting, {"", None, "false"})
+            self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
     async def test_none_context_field_clears_rls_setting(self):
@@ -176,7 +161,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
             context=context, bind=self.instance.async_non_superadmin_engine
         )
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "account_id")
+            setting = await rls_setting(rls_sess, "account_id")
             self.assertEqual(
                 setting,
                 "",
@@ -296,6 +281,16 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
                         [2],
                         "Non-bypassed session should see only its account's user.",
                     )
+                    # Now both are bypassed
+                    async with rls_sess2.bypass_rls():
+                        result1_bypass = list(
+                            (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
+                        )
+                        result2_bypass = list(
+                            (await rls_sess2.execute(_USER_ID_QUERY)).scalars()
+                        )
+                        self.assertEqual(result1_bypass, [1, 2])
+                        self.assertEqual(result2_bypass, [1, 2])
 
                 # After bypass exits, session1 is restricted again
                 result1_after = list(
@@ -327,23 +322,21 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         async with rls_sess.bypass_rls():
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1, 2])
-            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            self.assertTrue(await rls_bypassed(rls_sess))
             await rls_sess.commit()
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1, 2])
-            self.assertEqual(await get_pg_rls_setting(rls_sess, "bypass_rls"), "true")
+            self.assertTrue(await rls_bypassed(rls_sess))
         result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
         self.assertEqual(result, [1])
-        setting = await get_pg_rls_setting(rls_sess, "bypass_rls")
-        self.assertIn(setting, {"", None, "false"})
+        self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
     async def test_begin_sets_rls_account_id_setting(self):
         """begin() sets the rls.account_id pg setting to the context value."""
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
         await rls_sess.close()
 
     async def test_scalar_sets_rls_settings(self):
@@ -365,8 +358,7 @@ class TestAsyncRLSSessionBehavior(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
             await rls_sess.flush()
-            setting = await get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
         await rls_sess.close()
@@ -391,8 +383,7 @@ class TestAsyncRLSWithOrmModels(unittest.IsolatedAsyncioTestCase):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
-            setting = await get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             users = list(
                 await rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -455,8 +446,7 @@ class TestAsyncRLSWithOrmModels(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual([u.id for u in users], [1])
             await rls_sess.flush()
-            setting = await get_pg_rls_setting(rls_sess, "account_id")
-            self.assertEqual(setting, "1")
+            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             users_after_flush = list(
                 await rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
