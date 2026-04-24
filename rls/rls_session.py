@@ -44,6 +44,8 @@ def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
         )
     ]
     for key in keys:
+        if key == "bypass_rls":
+            raise ValueError("Context field names cannot be 'bypass_rls'")
         # Bind parameters are named after the field (e.g. setting_account_id,
         # value_account_id) so the mapping is explicit and not order-dependent.
         set_config_calls.append(
