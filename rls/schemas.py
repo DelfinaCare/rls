@@ -9,6 +9,8 @@ from sqlalchemy.sql import elements
 
 from . import _sql_gen
 
+_CONDITION_ARGS_PREFIX = "rls"
+
 
 class Command(str, Enum):
     # policies: https://www.postgresql.org/docs/current/sql-createpolicy.html
@@ -34,12 +36,7 @@ class Policy(pydantic.BaseModel):
     custom_policy_name: str | None = None
 
     _policy_names: list[str] = pydantic.PrivateAttr(default_factory=list)
-    _compiled_custom_expr: elements.ClauseElement | None = pydantic.PrivateAttr(
-        default=None
-    )
     _expr: str = pydantic.PrivateAttr(default="")
-    _policy_suffix: str = pydantic.PrivateAttr(default="")
-    _condition_args_prefix: str = pydantic.PrivateAttr(default="rls")
 
     @property
     def policy_names(self) -> list[str]:
@@ -55,17 +52,14 @@ class Policy(pydantic.BaseModel):
     def expression(self, expr: str) -> None:
         self._expr = expr
 
-    def _ensure_boolean(self):
-        """
-        Ensures that the given expression evaluates to a Boolean value.
-        Raises ValueError if the expression is not of Boolean type.
-        """
-        if isinstance(self._compiled_custom_expr.type, sqlalchemy.Boolean):
-            return
+    def _compile_custom_expr(self, table_name: str) -> None:
+        """Validate and compile the custom expression into a SQL string."""
+        if self.custom_expr is None:
+            raise ValueError(
+                f"`custom_expr` must be defined for table `{table_name}`. "
+                "If you're constructing expressions dynamically, provide a callable."
+            )
 
-        raise ValueError("Expression does not evaluate to a Boolean value")
-
-    def _validate_arguments_length(self):
         condition_args_length = (
             len(self.condition_args) if self.condition_args is not None else 0
         )
@@ -75,44 +69,27 @@ class Policy(pydantic.BaseModel):
                 f"Length mismatch for arguments. Expected {condition_args_length}, got {lambda_args_length}"
             )
 
-    def _convert_lambda_to_clause_element(self) -> None:
-        """Convert the lambda function to a SQLAlchemy expression."""
         args = []
         for arg in self.condition_args or []:
             wrapped_value = sql.func.nullif(
                 sql.func.current_setting(
-                    f"{self._condition_args_prefix}.{arg.comparator_name}", True
+                    f"{_CONDITION_ARGS_PREFIX}.{arg.comparator_name}", True
                 ),
                 "",
             ).cast(arg.type)
             args.append(wrapped_value)
-        if self.custom_expr is not None:
-            self._compiled_custom_expr = self.custom_expr(*args)
-            self._expr = str(
-                self._compiled_custom_expr.compile(
-                    compile_kwargs={"literal_binds": True}
-                )
-            )
 
-    def _get_expr_from_custom_expr(self, table_name: str) -> None:
-        """Get the SQL expression from the custom expression with RLS prefixing."""
-        if self.custom_expr is not None:
-            self._validate_arguments_length()
+        compiled = self.custom_expr(*args)
 
-            self._convert_lambda_to_clause_element()
+        if not isinstance(compiled.type, sqlalchemy.Boolean):
+            raise ValueError("Expression does not evaluate to a Boolean value")
 
-            self._ensure_boolean()
-        else:
-            raise ValueError(
-                f"`custom_expr` must be defined for table `{table_name}`. "
-                "If you're constructing expressions dynamically, provide a callable."
-            )
+        self._expr = str(compiled.compile(compile_kwargs={"literal_binds": True}))
 
     def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
         commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
-        self._policy_suffix = name_suffix
 
-        self._get_expr_from_custom_expr(table_name=table_name)
+        self._compile_custom_expr(table_name=table_name)
 
         # Reset policy names for this call so re-invocations don't accumulate duplicates.
         self._policy_names = []
@@ -121,16 +98,15 @@ class Policy(pydantic.BaseModel):
         for cmd in commands:
             cmd_value = cmd.value
 
-            policy_name = ""
             if self.custom_policy_name is not None:
                 policy_name = (
                     f"{table_name}_{self.custom_policy_name}"
-                    f"_{cmd_value}_policy_{self._policy_suffix}".lower()
+                    f"_{cmd_value}_policy_{name_suffix}".lower()
                 )
             else:
                 policy_name = (
                     f"{table_name}_{self.definition}"
-                    f"_{cmd_value}_policy_{self._policy_suffix}".lower()
+                    f"_{cmd_value}_policy_{name_suffix}".lower()
                 )
 
             self._policy_names.append(policy_name)
