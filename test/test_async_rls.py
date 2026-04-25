@@ -450,5 +450,212 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
             )
 
 
+class AsyncRlsSessionTransactionTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for the :class:`RlsAsyncSessionTransaction` wrapper."""
+
+    instance: database.TestPostgres
+    engine: sa_asyncio.AsyncEngine
+
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        cls.engine = sa_asyncio.create_async_engine(cls.instance.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        asyncio.run(cls.engine.dispose())
+        cls.instance.close()
+
+    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
+        return rls_session.AsyncRlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.engine,
+        )
+
+    # -- type / identity ----------------------------------------------------
+
+    async def test_begin_returns_rls_async_session_transaction(self):
+        """begin() returns an RlsAsyncSessionTransaction, not a raw AsyncSessionTransaction."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin() as tx:
+            self.assertIsInstance(tx, rls_session.RlsAsyncSessionTransaction)
+            self.assertNotIsInstance(tx, sa_asyncio.AsyncSessionTransaction)
+        await rls_sess.close()
+
+    async def test_transaction_session_property(self):
+        """The transaction's .session property points back at the owning AsyncRlsSession."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin() as tx:
+            self.assertIs(tx.session, rls_sess)
+        await rls_sess.close()
+
+    # -- proxy properties ---------------------------------------------------
+
+    async def test_transaction_is_active_inside_block(self):
+        """is_active is True while the async transaction is open."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin() as tx:
+            self.assertTrue(tx.is_active)
+        await rls_sess.close()
+
+    async def test_transaction_nested_is_false(self):
+        """A regular begin() transaction is not nested."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin() as tx:
+            self.assertFalse(tx.nested)
+        await rls_sess.close()
+
+    async def test_transaction_sync_transaction_property(self):
+        """sync_transaction proxies the underlying SessionTransaction."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin() as tx:
+            self.assertIsNotNone(tx.sync_transaction)
+        await rls_sess.close()
+
+    # -- RLS filtering via transaction --------------------------------------
+
+    async def test_rls_filtering_through_transaction(self):
+        """Queries executed within the async transaction block apply RLS."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        await rls_sess.close()
+
+    async def test_begin_sets_rls_setting_via_transaction(self):
+        """begin() sets the rls.account_id pg setting via the async transaction wrapper."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
+        await rls_sess.close()
+
+    # -- commit / rollback dirty tracking -----------------------------------
+
+    async def test_explicit_commit_sets_dirty(self):
+        """Calling tx.commit() marks the session as dirty."""
+        rls_sess = self._new_session()
+        tx = rls_sess.begin()
+        await tx.__aenter__()
+        rls_sess._rls_dirty = False
+        await tx.commit()
+        self.assertTrue(rls_sess._rls_dirty)
+        # Transaction is now committed; clean up without committing again
+        await tx.__aexit__(None, None, None)
+        await rls_sess.close()
+
+    async def test_explicit_rollback_sets_dirty(self):
+        """Calling tx.rollback() marks the session as dirty."""
+        rls_sess = self._new_session()
+        tx = rls_sess.begin()
+        await tx.__aenter__()
+        rls_sess._rls_dirty = False
+        await tx.rollback()
+        self.assertTrue(rls_sess._rls_dirty)
+        await tx.__aexit__(None, None, None)
+        await rls_sess.close()
+
+    async def test_context_exit_commit_sets_dirty(self):
+        """Normal context-manager exit (implicit commit) marks the session as dirty."""
+        rls_sess = self._new_session()
+        async with rls_sess.begin():
+            rls_sess._rls_dirty = False
+        self.assertTrue(rls_sess._rls_dirty)
+        await rls_sess.close()
+
+    async def test_context_exit_rollback_on_exception_sets_dirty(self):
+        """Context-manager exit with an exception (implicit rollback) marks dirty."""
+        rls_sess = self._new_session()
+        with self.assertRaises(ValueError):
+            async with rls_sess.begin():
+                rls_sess._rls_dirty = False
+                raise ValueError("boom")
+        self.assertTrue(rls_sess._rls_dirty)
+        await rls_sess.close()
+
+    # -- RLS re-application after commit ------------------------------------
+
+    async def test_rls_reapplied_after_transaction_commit(self):
+        """After a transaction, a new begin() still applies RLS."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        async with rls_sess.begin():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        await rls_sess.close()
+
+    async def test_rls_reapplied_after_transaction_rollback_on_error(self):
+        """After an exception rolls back the transaction, a new begin() still applies RLS."""
+        rls_sess = self._new_session(account_id=1)
+        with self.assertRaises(ValueError):
+            async with rls_sess.begin():
+                raise ValueError("test")
+        async with rls_sess.begin():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        await rls_sess.close()
+
+    # -- bypass within transaction ------------------------------------------
+
+    async def test_bypass_rls_within_transaction(self):
+        """bypass_rls inside an async transaction block still works correctly."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            async with rls_sess.bypass_rls():
+                result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result, [1, 2])
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1])
+        await rls_sess.close()
+
+    # -- different accounts via transaction ---------------------------------
+
+    async def test_different_accounts_via_transaction(self):
+        """Two async sessions with different contexts see different data."""
+        rls_sess1 = self._new_session(account_id=1)
+        rls_sess2 = self._new_session(account_id=2)
+        async with rls_sess1.begin():
+            async with rls_sess2.begin():
+                r1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+                r2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(r1, [1])
+                self.assertEqual(r2, [2])
+        await rls_sess1.close()
+        await rls_sess2.close()
+
+    # -- await protocol -----------------------------------------------------
+
+    async def test_await_begin_returns_transaction(self):
+        """Awaiting begin() returns an RlsAsyncSessionTransaction."""
+        rls_sess = self._new_session()
+        tx = await rls_sess.begin()
+        self.assertIsInstance(tx, rls_session.RlsAsyncSessionTransaction)
+        await tx.rollback()
+        await rls_sess.close()
+
+    async def test_await_begin_applies_rls(self):
+        """Awaiting begin() also applies RLS settings."""
+        rls_sess = self._new_session(account_id=1)
+        tx = await rls_sess.begin()
+        self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(result, [1])
+        await tx.rollback()
+        await rls_sess.close()
+
+    async def test_mutable_context_reapplied_via_transaction(self):
+        """Changing a mutable context mid-transaction re-applies RLS."""
+        context = models.SampleRlsContext(account_id=1)
+        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        async with rls_sess.begin():
+            first = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(first, [1])
+            context.account_id = 2
+            second = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(second, [2])
+        await rls_sess.close()
+
+
 if __name__ == "__main__":
     unittest.main()

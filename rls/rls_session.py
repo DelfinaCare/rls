@@ -185,9 +185,7 @@ class RlsAsyncSessionTransaction:
 
     # -- awaitable / async-context-manager protocol ------------------------
 
-    async def start(
-        self, is_ctxmanager: bool = False
-    ) -> RlsAsyncSessionTransaction:
+    async def start(self, is_ctxmanager: bool = False) -> RlsAsyncSessionTransaction:
         await self._transaction.start(is_ctxmanager=is_ctxmanager)
         await self._session._execute_set_statements()
         return self
@@ -198,9 +196,7 @@ class RlsAsyncSessionTransaction:
     async def __aenter__(self) -> RlsAsyncSessionTransaction:
         return await self.start(is_ctxmanager=True)
 
-    async def __aexit__(
-        self, type_: object, value: object, traceback: object
-    ) -> None:
+    async def __aexit__(self, type_: object, value: object, traceback: object) -> None:
         try:
             await self._transaction.__aexit__(type_, value, traceback)
         finally:
