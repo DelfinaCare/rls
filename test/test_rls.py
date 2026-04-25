@@ -578,21 +578,19 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
     def test_explicit_commit_sets_dirty(self):
         """Calling tx.commit() inside the block marks the session as dirty."""
         rls_sess = self._new_session()
-        tx = rls_sess.begin()
-        tx.__enter__()
-        rls_sess._rls_dirty = False
-        tx.commit()
-        self.assertTrue(rls_sess._rls_dirty)
+        with rls_sess.begin() as tx:
+            rls_sess._rls_dirty = False
+            tx.commit()
+            self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
     def test_explicit_rollback_sets_dirty(self):
         """Calling tx.rollback() inside the block marks the session as dirty."""
         rls_sess = self._new_session()
-        tx = rls_sess.begin()
-        tx.__enter__()
-        rls_sess._rls_dirty = False
-        tx.rollback()
-        self.assertTrue(rls_sess._rls_dirty)
+        with rls_sess.begin() as tx:
+            rls_sess._rls_dirty = False
+            tx.rollback()
+            self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
     def test_context_exit_commit_sets_dirty(self):
@@ -671,9 +669,8 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
     def test_close_delegates_to_underlying_transaction(self):
         """tx.close() delegates to the underlying SessionTransaction."""
         rls_sess = self._new_session()
-        tx = rls_sess.begin()
-        tx.__enter__()
-        tx.close()
+        with rls_sess.begin() as tx:
+            tx.close()
         rls_sess.close()
 
     def test_mutable_context_reapplied_via_transaction(self):

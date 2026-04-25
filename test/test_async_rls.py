@@ -534,24 +534,19 @@ class AsyncRlsSessionTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_commit_sets_dirty(self):
         """Calling tx.commit() marks the session as dirty."""
         rls_sess = self._new_session()
-        tx = rls_sess.begin()
-        await tx.__aenter__()
-        rls_sess._rls_dirty = False
-        await tx.commit()
-        self.assertTrue(rls_sess._rls_dirty)
-        # Transaction is now committed; clean up without committing again
-        await tx.__aexit__(None, None, None)
+        async with rls_sess.begin() as tx:
+            rls_sess._rls_dirty = False
+            await tx.commit()
+            self.assertTrue(rls_sess._rls_dirty)
         await rls_sess.close()
 
     async def test_explicit_rollback_sets_dirty(self):
         """Calling tx.rollback() marks the session as dirty."""
         rls_sess = self._new_session()
-        tx = rls_sess.begin()
-        await tx.__aenter__()
-        rls_sess._rls_dirty = False
-        await tx.rollback()
-        self.assertTrue(rls_sess._rls_dirty)
-        await tx.__aexit__(None, None, None)
+        async with rls_sess.begin() as tx:
+            rls_sess._rls_dirty = False
+            await tx.rollback()
+            self.assertTrue(rls_sess._rls_dirty)
         await rls_sess.close()
 
     async def test_context_exit_commit_sets_dirty(self):
