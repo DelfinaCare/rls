@@ -9,11 +9,6 @@ from sqlalchemy.ext import declarative
 from . import _sql_gen
 from . import schemas
 
-############################
-# OPERATIONS
-############################
-
-
 @alembic_operations.Operations.register_operation("enable_rls")
 class EnableRlsOp(alembic_operations.MigrateOperation):
     """Enable RowLevelSecurity."""
@@ -50,11 +45,6 @@ class DisableRlsOp(alembic_operations.MigrateOperation):
         return EnableRlsOp(self.tablename, schemaname=self.schemaname)
 
 
-############################
-# IMPLEMENTATION
-############################
-
-
 @alembic_operations.Operations.implementation_for(EnableRlsOp)
 def enable_rls(operations, operation):
     if operation.schemaname is not None:
@@ -71,11 +61,6 @@ def disable_rls(operations, operation):
     else:
         name = operation.tablename
     operations.execute(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY")
-
-
-############################
-# PROTOCOL
-############################
 
 
 class RLSOp(typing.Protocol):
@@ -110,20 +95,10 @@ class RLSOp(typing.Protocol):
     ) -> None: ...
 
 
-############################
-# RENDER HELPERS
-############################
-
-
 def _add_rls_imports(autogen_context: typing.Any) -> None:
     """Inject the imports needed to use ``typing.cast(alembic_rls.RLSOp, op)`` in a migration file."""
     autogen_context.imports.add("import typing")
     autogen_context.imports.add("from rls import alembic_rls")
-
-
-############################
-# RENDER
-############################
 
 
 @autogenerate.renderers.dispatch_for(EnableRlsOp)
@@ -136,11 +111,6 @@ def render_enable_rls(autogen_context, op):
 def render_disable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
     return "typing.cast(alembic_rls.RLSOp, op).disable_rls(%r)" % (op.tablename)
-
-
-############################
-# COMPARATORS
-############################
 
 
 def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
