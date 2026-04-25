@@ -9,10 +9,6 @@ from sqlalchemy.ext import declarative
 from rls import alembic_rls
 from rls import schemas
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _mock_operations():
     """Return a mock Alembic operations object."""
@@ -38,11 +34,6 @@ def _make_boolean_policy(**kwargs):
     }
     defaults.update(kwargs)
     return schemas.Permissive(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# EnableRlsOp
-# ---------------------------------------------------------------------------
 
 
 class TestEnableRlsOp(unittest.TestCase):
@@ -72,11 +63,6 @@ class TestEnableRlsOp(unittest.TestCase):
         self.assertEqual(rev.schemaname, "myschema")
 
 
-# ---------------------------------------------------------------------------
-# DisableRlsOp
-# ---------------------------------------------------------------------------
-
-
 class TestDisableRlsOp(unittest.TestCase):
     def test_init_without_schema(self):
         op = alembic_rls.DisableRlsOp("users")
@@ -102,11 +88,6 @@ class TestDisableRlsOp(unittest.TestCase):
         self.assertIsInstance(rev, alembic_rls.EnableRlsOp)
         self.assertEqual(rev.tablename, "items")
         self.assertEqual(rev.schemaname, "s")
-
-
-# ---------------------------------------------------------------------------
-# enable_rls / disable_rls implementations
-# ---------------------------------------------------------------------------
 
 
 class TestEnableRlsImpl(unittest.TestCase):
@@ -145,22 +126,12 @@ class TestDisableRlsImpl(unittest.TestCase):
         )
 
 
-# ---------------------------------------------------------------------------
-# _add_rls_imports
-# ---------------------------------------------------------------------------
-
-
 class TestAddRlsImports(unittest.TestCase):
     def test_adds_expected_imports(self):
         ctx = _mock_autogen_context()
         alembic_rls._add_rls_imports(ctx)
         self.assertIn("import typing", ctx.imports)
         self.assertIn("from rls import alembic_rls", ctx.imports)
-
-
-# ---------------------------------------------------------------------------
-# Renderers
-# ---------------------------------------------------------------------------
 
 
 class TestRenderEnableRls(unittest.TestCase):
@@ -181,11 +152,6 @@ class TestRenderDisableRls(unittest.TestCase):
         self.assertIn("disable_rls", result)
         self.assertIn("'items'", result)
         self.assertIn("import typing", ctx.imports)
-
-
-# ---------------------------------------------------------------------------
-# CreatePolicyOp
-# ---------------------------------------------------------------------------
 
 
 class TestCreatePolicyOp(unittest.TestCase):
@@ -236,11 +202,6 @@ class TestCreatePolicyOp(unittest.TestCase):
         self.assertEqual(rev.expr, "id = 1")
 
 
-# ---------------------------------------------------------------------------
-# DropPolicyOp
-# ---------------------------------------------------------------------------
-
-
 class TestDropPolicyOp(unittest.TestCase):
     def test_init(self):
         op = alembic_rls.DropPolicyOp(
@@ -285,11 +246,6 @@ class TestDropPolicyOp(unittest.TestCase):
         self.assertEqual(rev.expr, "id = 1")
 
 
-# ---------------------------------------------------------------------------
-# create_policy / drop_policy implementations
-# ---------------------------------------------------------------------------
-
-
 class TestCreatePolicyImpl(unittest.TestCase):
     def test_executes_generated_sql(self):
         ops = _mock_operations()
@@ -320,11 +276,6 @@ class TestDropPolicyImpl(unittest.TestCase):
         )
         alembic_rls.drop_policy(ops, operation)
         ops.execute.assert_called_once_with("DROP POLICY pol1 ON users;")
-
-
-# ---------------------------------------------------------------------------
-# render_create_policy / render_drop_policy
-# ---------------------------------------------------------------------------
 
 
 class TestRenderCreatePolicy(unittest.TestCase):
@@ -363,22 +314,12 @@ class TestRenderDropPolicy(unittest.TestCase):
         self.assertIn("import typing", ctx.imports)
 
 
-# ---------------------------------------------------------------------------
-# _cmd_value
-# ---------------------------------------------------------------------------
-
-
 class TestCmdValue(unittest.TestCase):
     def test_with_enum(self):
         self.assertEqual(alembic_rls._cmd_value(schemas.Command.select), "SELECT")
 
     def test_with_string(self):
         self.assertEqual(alembic_rls._cmd_value("ALL"), "ALL")
-
-
-# ---------------------------------------------------------------------------
-# set_metadata_info
-# ---------------------------------------------------------------------------
 
 
 class TestSetMetadataInfo(unittest.TestCase):
@@ -405,11 +346,6 @@ class TestSetMetadataInfo(unittest.TestCase):
         self.assertIn(NoRls.__tablename__, Base.metadata.tables)
         alembic_rls.set_metadata_info(Base)
         self.assertEqual(Base.metadata.info["rls_policies"], {})
-
-
-# ---------------------------------------------------------------------------
-# compare_table_level  (the autogenerate comparator)
-# ---------------------------------------------------------------------------
 
 
 class TestCompareTableLevel(unittest.TestCase):
@@ -465,8 +401,6 @@ class TestCompareTableLevel(unittest.TestCase):
 
         return modify_ops
 
-    # -- RLS enable/disable -------------------------------------------------
-
     def test_enable_rls_when_meta_has_but_db_does_not(self):
         policy = _make_boolean_policy()
         policy.get_sql_policies(table_name="users")
@@ -515,8 +449,6 @@ class TestCompareTableLevel(unittest.TestCase):
         ]
         self.assertEqual(len(enable_ops), 0)
         self.assertEqual(len(disable_ops), 0)
-
-    # -- Policy create/drop -------------------------------------------------
 
     def test_creates_policy_when_missing_from_db(self):
         policy = _make_boolean_policy()
