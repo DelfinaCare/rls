@@ -9,6 +9,7 @@ from sqlalchemy.ext import declarative
 from rls import alembic_rls
 from rls import schemas
 
+
 def _mock_operations():
     """Return a mock Alembic operations object."""
     ops = mock.MagicMock()

@@ -9,6 +9,7 @@ from sqlalchemy.ext import declarative
 from . import _sql_gen
 from . import schemas
 
+
 @alembic_operations.Operations.register_operation("enable_rls")
 class EnableRlsOp(alembic_operations.MigrateOperation):
     """Enable RowLevelSecurity."""
