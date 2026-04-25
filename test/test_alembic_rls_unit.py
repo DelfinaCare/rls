@@ -1,5 +1,6 @@
 import typing
 import unittest
+from unittest import mock
 
 import sqlalchemy
 from sqlalchemy import sql
@@ -15,13 +16,13 @@ from rls import schemas
 
 def _mock_operations():
     """Return a mock Alembic operations object."""
-    ops = unittest.mock.MagicMock()
+    ops = mock.MagicMock()
     return ops
 
 
 def _mock_autogen_context():
     """Return a mock autogen_context with an ``imports`` set."""
-    ctx = unittest.mock.MagicMock()
+    ctx = mock.MagicMock()
     ctx.imports = set()
     return ctx
 
