@@ -401,6 +401,7 @@ class TestSetMetadataInfo(unittest.TestCase):
             __tablename__ = "no_rls"
             id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
 
+        self.assertIn(NoRls.__tablename__, Base.metadata.tables)
         alembic_rls.set_metadata_info(Base)
         self.assertEqual(Base.metadata.info["rls_policies"], {})
 
