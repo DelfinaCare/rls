@@ -493,31 +493,6 @@ class SyncRLSTests(unittest.TestCase):
                 "Public schema tables must still exist after a context with a malicious value.",
             )
 
-
-class SyncRlsSessionTransactionTests(unittest.TestCase):
-    """Tests for the :class:`RlsSessionTransaction` wrapper."""
-
-    instance: database.TestPostgres
-    engine: sqlalchemy.engine.Engine
-
-    @classmethod
-    def setUpClass(cls):
-        cls.instance = database.test_postgres_instance()
-        cls.engine = sqlalchemy.create_engine(cls.instance.url)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.engine.dispose()
-        cls.instance.close()
-
-    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
-        return rls_session.RlsSession(
-            context=models.SampleRlsContext(account_id=account_id),
-            bind=self.engine,
-        )
-
-    # -- type / identity ----------------------------------------------------
-
     def test_begin_returns_rls_session_transaction(self):
         """begin() returns an RlsSessionTransaction, not the session itself."""
         rls_sess = self._new_session()
@@ -532,8 +507,6 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
         with rls_sess.begin() as tx:
             self.assertIs(tx.session, rls_sess)
         rls_sess.close()
-
-    # -- proxy properties ---------------------------------------------------
 
     def test_transaction_is_active_inside_block(self):
         """is_active is True while the transaction is open."""
@@ -556,8 +529,6 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             self.assertIsNone(tx.parent)
         rls_sess.close()
 
-    # -- RLS filtering via transaction --------------------------------------
-
     def test_rls_filtering_through_transaction(self):
         """Queries executed via the session within a transaction block apply RLS."""
         rls_sess = self._new_session(account_id=1)
@@ -573,9 +544,7 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
         rls_sess.close()
 
-    # -- commit / rollback dirty tracking -----------------------------------
-
-    def test_explicit_commit_sets_dirty(self):
+    def test_transaction_explicit_commit_sets_dirty(self):
         """Calling tx.commit() inside the block marks the session as dirty."""
         rls_sess = self._new_session()
         with rls_sess.begin() as tx:
@@ -584,7 +553,7 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
-    def test_explicit_rollback_sets_dirty(self):
+    def test_transaction_explicit_rollback_sets_dirty(self):
         """Calling tx.rollback() inside the block marks the session as dirty."""
         rls_sess = self._new_session()
         with rls_sess.begin() as tx:
@@ -593,7 +562,7 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
-    def test_context_exit_commit_sets_dirty(self):
+    def test_transaction_context_exit_commit_sets_dirty(self):
         """Normal context-manager exit (implicit commit) marks the session as dirty."""
         rls_sess = self._new_session()
         with rls_sess.begin():
@@ -601,7 +570,7 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
         self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
-    def test_context_exit_rollback_on_exception_sets_dirty(self):
+    def test_transaction_context_exit_rollback_on_exception_sets_dirty(self):
         """Context-manager exit with an exception (implicit rollback) marks dirty."""
         rls_sess = self._new_session()
         with self.assertRaises(ValueError):
@@ -611,15 +580,12 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
         self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
-    # -- RLS re-application after commit ------------------------------------
-
     def test_rls_reapplied_after_transaction_commit(self):
         """After an explicit tx.commit(), a new begin() still applies RLS."""
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
-        # new transaction
         with rls_sess.begin():
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
@@ -636,8 +602,6 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             self.assertEqual(result, [1])
         rls_sess.close()
 
-    # -- bypass within transaction ------------------------------------------
-
     def test_bypass_rls_within_transaction(self):
         """bypass_rls inside a transaction block still works correctly."""
         rls_sess = self._new_session(account_id=1)
@@ -648,8 +612,6 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
         rls_sess.close()
-
-    # -- different accounts see different data via transaction ---------------
 
     def test_different_accounts_via_transaction(self):
         """Two sessions with different contexts see different data."""
@@ -664,16 +626,14 @@ class SyncRlsSessionTransactionTests(unittest.TestCase):
         rls_sess1.close()
         rls_sess2.close()
 
-    # -- close / prepare ----------------------------------------------------
-
-    def test_close_delegates_to_underlying_transaction(self):
+    def test_transaction_close_delegates(self):
         """tx.close() delegates to the underlying SessionTransaction."""
         rls_sess = self._new_session()
         with rls_sess.begin() as tx:
             tx.close()
         rls_sess.close()
 
-    def test_mutable_context_reapplied_via_transaction(self):
+    def test_transaction_mutable_context_reapplied(self):
         """Changing a mutable context mid-transaction re-applies RLS."""
         context = models.SampleRlsContext(account_id=1)
         rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
