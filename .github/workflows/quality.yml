@@ -62,5 +62,4 @@ jobs:
       - name: Run unit tests
         env:
           PYTHONPATH: "${{ github.workspace }}/test"
-        run: |
-          python3 -m unittest test/test_alembic.py && python3 -m unittest test/test_rls.py && python3 -m unittest test/test_fastapi.py
+        run: python3 -m unittest discover
