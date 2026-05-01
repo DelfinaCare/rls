@@ -32,7 +32,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - python-version: "3.14"
+            postgres-version: "16"
+          - python-version: "3.14"
+            postgres-version: "17"
+          - python-version: "3.14"
+            postgres-version: "18"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -41,6 +48,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Install PostgreSQL ${{ matrix.postgres-version }}
+        if: matrix.postgres-version
+        run: |
+          sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update
+          sudo apt-get install -y postgresql-${{ matrix.postgres-version }}
+          echo "/usr/lib/postgresql/${{ matrix.postgres-version }}/bin" >> $GITHUB_PATH
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run unit tests
