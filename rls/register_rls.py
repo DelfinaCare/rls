@@ -1,12 +1,12 @@
 import sqlalchemy
-from sqlalchemy.ext import declarative
+from sqlalchemy import orm
 
 from rls import alembic_rls
 
 from . import create_policies
 
 
-def register_rls(Base: type[declarative.DeclarativeMeta]):
+def register_rls(Base: type[orm.DeclarativeMeta]):
     # Called here so that Alembic autogenerate has policy metadata available
     # immediately (before any DDL runs or the after_create event fires).
     alembic_rls.set_metadata_info(Base)

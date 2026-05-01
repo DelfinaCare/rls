@@ -1,11 +1,9 @@
 import sqlalchemy
 from sqlalchemy import engine
-from sqlalchemy.ext import declarative
+from sqlalchemy import orm
 
 
-def create_policies(
-    Base: type[declarative.DeclarativeMeta], connection: engine.Connection
-):
+def create_policies(Base: type[orm.DeclarativeMeta], connection: engine.Connection):
     """Create policies for `Base.metadata.create_all()`."""
     for table, settings in Base.metadata.info["rls_policies"].items():
         # enable

@@ -3,8 +3,8 @@ import typing
 import sqlalchemy as sa
 from alembic import autogenerate
 from alembic import operations as alembic_operations
+from sqlalchemy import orm
 from sqlalchemy.dialects import postgresql as pg_dialect
-from sqlalchemy.ext import declarative
 
 from . import _sql_gen
 from . import schemas
@@ -397,7 +397,7 @@ def render_drop_policy(autogen_context, op):
     )
 
 
-def set_metadata_info(Base: type[declarative.DeclarativeMeta]):
+def set_metadata_info(Base: type[orm.DeclarativeMeta]):
     """RLS policies are first added to the Metadata before applied."""
     Base.metadata.info.setdefault("rls_policies", dict())
     for mapper in Base.registry.mappers:

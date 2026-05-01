@@ -3,8 +3,8 @@ import unittest
 from unittest import mock
 
 import sqlalchemy
+from sqlalchemy import orm
 from sqlalchemy import sql
-from sqlalchemy.ext import declarative
 
 from rls import alembic_rls
 from rls import schemas
@@ -337,7 +337,7 @@ class TestSetMetadataInfo(unittest.TestCase):
 
     def test_skips_models_without_rls_policies(self):
         """Models without __rls_policies__ should not appear in the dict."""
-        Base: typing.Any = declarative.declarative_base()
+        Base: typing.Any = orm.declarative_base()
 
         class NoRls(Base):
             __tablename__ = "no_rls"
