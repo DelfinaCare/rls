@@ -1,4 +1,5 @@
-import contextlib
+import sys
+from collections import abc
 
 import pydantic
 import sqlalchemy
@@ -100,6 +101,136 @@ class _RlsSessionMixin:
         return self._rls_set_template.params(**value_params)
 
 
+class RlsSessionTransaction:
+    """Wraps :class:`~sqlalchemy.orm.SessionTransaction` so that every
+    commit / rollback marks the owning :class:`RlsSession` as *dirty*,
+    ensuring RLS configuration is re-applied on the next statement.
+
+    Composition is used instead of inheritance because ``SessionTransaction``
+    is instantiated internally by ``Session.begin()`` with private state
+    (``SessionTransactionOrigin``, parent chain, snapshot).  We need to wrap
+    the already-constructed instance rather than create a new subclass
+    instance, so delegation is the only viable approach.
+    """
+
+    def __init__(
+        self,
+        transaction: orm.SessionTransaction,
+        session: "RlsSession",
+    ) -> None:
+        self._transaction = transaction
+        self._session = session
+
+    def __enter__(self) -> "RlsSessionTransaction":
+        self._transaction.__enter__()
+        try:
+            self._session._execute_set_statements()
+        except BaseException:
+            self._transaction.__exit__(*sys.exc_info())
+            raise
+        return self
+
+    def __exit__(self, type_: object, value: object, traceback: object) -> None:
+        try:
+            self._transaction.__exit__(type_, value, traceback)
+        finally:
+            self._session._rls_dirty = True
+
+    def commit(self) -> None:
+        self._transaction.commit()
+        self._session._rls_dirty = True
+
+    def rollback(self) -> None:
+        self._transaction.rollback()
+        self._session._rls_dirty = True
+
+    def close(self, invalidate: bool = False) -> None:
+        self._transaction.close(invalidate=invalidate)
+
+    def prepare(self) -> None:
+        self._transaction.prepare()
+
+    @property
+    def session(self) -> "RlsSession":
+        return self._session
+
+    @property
+    def is_active(self) -> bool:
+        return self._transaction.is_active  # type: ignore[return-value]
+
+    @property
+    def parent(self) -> orm.SessionTransaction | None:
+        return self._transaction.parent
+
+    @property
+    def nested(self) -> bool:
+        return self._transaction.nested  # type: ignore[return-value]
+
+
+class RlsAsyncSessionTransaction:
+    """Wraps :class:`~sqlalchemy.ext.asyncio.AsyncSessionTransaction` so that
+    every commit / rollback marks the owning :class:`AsyncRlsSession` as
+    *dirty*, ensuring RLS configuration is re-applied on the next statement.
+
+    Composition is used instead of inheritance because
+    ``AsyncSessionTransaction`` is instantiated internally by
+    ``AsyncSession.begin()`` with private state.  We need to wrap the
+    already-constructed instance rather than create a new subclass instance,
+    so delegation is the only viable approach.
+    """
+
+    def __init__(
+        self,
+        transaction: sa_asyncio.AsyncSessionTransaction,
+        session: "AsyncRlsSession",
+    ) -> None:
+        self._transaction = transaction
+        self._session = session
+
+    async def start(self, is_ctxmanager: bool = False) -> "RlsAsyncSessionTransaction":
+        await self._transaction.start(is_ctxmanager=is_ctxmanager)
+        await self._session._execute_set_statements()
+        return self
+
+    def __await__(
+        self,
+    ) -> abc.Generator[object, object, "RlsAsyncSessionTransaction"]:
+        return self.start().__await__()
+
+    async def __aenter__(self) -> "RlsAsyncSessionTransaction":
+        return await self.start(is_ctxmanager=True)
+
+    async def __aexit__(self, type_: object, value: object, traceback: object) -> None:
+        try:
+            await self._transaction.__aexit__(type_, value, traceback)
+        finally:
+            self._session._rls_dirty = True
+
+    async def commit(self) -> None:
+        await self._transaction.commit()
+        self._session._rls_dirty = True
+
+    async def rollback(self) -> None:
+        await self._transaction.rollback()
+        self._session._rls_dirty = True
+
+    @property
+    def session(self) -> "AsyncRlsSession":
+        return self._session
+
+    @property
+    def is_active(self) -> bool:
+        return self._transaction.is_active  # type: ignore[return-value]
+
+    @property
+    def nested(self) -> bool:
+        return self._transaction.nested  # type: ignore[return-value]
+
+    @property
+    def sync_transaction(self) -> orm.SessionTransaction | None:
+        return self._transaction.sync_transaction
+
+
 class BypassRLSContext:
     def __init__(self, session: "RlsSession"):
         self.session = session
@@ -151,11 +282,8 @@ class RlsSession(_RlsSessionMixin, orm.Session):
             super().execute(stmt)
             self._rls_dirty = False
 
-    @contextlib.contextmanager
-    def begin(self):
-        with super().begin():
-            self._execute_set_statements()
-            yield self
+    def begin(self) -> RlsSessionTransaction:
+        return RlsSessionTransaction(super().begin(), self)
 
     def execute(self, *args, **kwargs):
         """
@@ -199,11 +327,8 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             await super().execute(stmt)
             self._rls_dirty = False
 
-    @contextlib.asynccontextmanager
-    async def begin(self):
-        async with super().begin() as transaction:
-            await self._execute_set_statements()
-            yield transaction
+    def begin(self) -> RlsAsyncSessionTransaction:
+        return RlsAsyncSessionTransaction(super().begin(), self)
 
     async def execute(self, *args, **kwargs):
         """
