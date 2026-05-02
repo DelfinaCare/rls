@@ -195,12 +195,8 @@ def compare_table_level(
     )
 
     # STEP 3. Get RLS policies defined in the metadata
-    rls_enabled_meta = tablename in metadata_table.metadata.info["rls_policies"]
-    rls_policies_meta = (
-        metadata_table.metadata.info["rls_policies"].get(tablename, [])
-        if rls_enabled_meta
-        else []
-    )
+    rls_policies_meta = metadata_table.metadata.info["rls_policies"].get(tablename, [])
+    rls_enabled_meta = bool(rls_policies_meta)
 
     # STEP 4. Enable or disable RLS on the table if needed
     if rls_enabled_meta and not rls_enabled_db:
