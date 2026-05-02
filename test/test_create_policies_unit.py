@@ -2,14 +2,15 @@ import unittest
 from unittest import mock
 
 import sqlalchemy
-from sqlalchemy import orm
+import sqlalchemy.orm
+import sqlalchemy.sql
 
 from rls import create_policies
 
 
-def _make_base_with_policies(rls_policies: dict) -> type[orm.DeclarativeMeta]:
+def _make_base_with_policies(rls_policies: dict) -> type[sqlalchemy.orm.DeclarativeMeta]:
     """Return a declarative base whose metadata carries the given rls_policies dict."""
-    Base: type[orm.DeclarativeMeta] = orm.declarative_base()
+    Base: type[sqlalchemy.orm.DeclarativeMeta] = sqlalchemy.orm.declarative_base()
     Base.metadata.info["rls_policies"] = rls_policies
     return Base
 
@@ -36,8 +37,6 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_enable_rls_called_for_table_with_policies(self):
         """ENABLE ROW LEVEL SECURITY must be issued for a table that has at least one policy."""
-        from sqlalchemy import sql
-
         from rls import schemas
 
         policy = schemas.Permissive(
@@ -47,7 +46,7 @@ class TestCreatePolicies(unittest.TestCase):
                 ),
             ],
             cmd=[schemas.Command.select],
-            custom_expr=lambda x: sql.column("id") == x,
+            custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
         )
         Base = _make_base_with_policies({"my_table": [policy]})
         conn = self._make_connection()
@@ -68,8 +67,6 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_only_tables_with_policies_are_processed(self):
         """When the dict mixes empty and non-empty policy lists, only tables with policies get ENABLE RLS."""
-        from sqlalchemy import sql
-
         from rls import schemas
 
         policy = schemas.Permissive(
@@ -79,7 +76,7 @@ class TestCreatePolicies(unittest.TestCase):
                 ),
             ],
             cmd=[schemas.Command.select],
-            custom_expr=lambda x: sql.column("id") == x,
+            custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
         )
         Base = _make_base_with_policies(
             {
