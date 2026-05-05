@@ -1,5 +1,4 @@
 import unittest
-from unittest import mock
 
 import sqlalchemy
 import sqlalchemy.orm
@@ -16,8 +15,8 @@ def _make_base_with_policies(rls_policies: dict) -> type[sqlalchemy.orm.Declarat
 
 
 class TestCreatePolicies(unittest.TestCase):
-    def _make_connection(self) -> mock.MagicMock:
-        return mock.MagicMock()
+    def _make_connection(self) -> unittest.mock.MagicMock:
+        return unittest.mock.MagicMock()
 
     def test_enable_rls_not_called_for_table_with_no_policies(self):
         """ENABLE ROW LEVEL SECURITY must not be issued for a table with an empty policy list."""
