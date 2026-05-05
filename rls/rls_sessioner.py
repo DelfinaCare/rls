@@ -50,9 +50,9 @@ class AsyncRlsSessioner:
                 "sessionmaker class must be AsyncRlsSession or a subclass of AsyncRlsSession"
             )
 
-        self.session_maker: sa_asyncio.async_sessionmaker[
-            session.AsyncRlsSession
-        ] = sessionmaker
+        self.session_maker: sa_asyncio.async_sessionmaker[session.AsyncRlsSession] = (
+            sessionmaker
+        )
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.asynccontextmanager
