@@ -5,6 +5,7 @@ import sqlalchemy.orm
 import sqlalchemy.sql
 
 from rls import create_policies
+from rls import schemas
 
 
 def _make_base_with_policies(rls_policies: dict) -> type[sqlalchemy.orm.DeclarativeMeta]:
@@ -36,8 +37,6 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_enable_rls_called_for_table_with_policies(self):
         """ENABLE ROW LEVEL SECURITY must be issued for a table that has at least one policy."""
-        from rls import schemas
-
         policy = schemas.Permissive(
             condition_args=[
                 schemas.ConditionArg(
@@ -66,8 +65,6 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_only_tables_with_policies_are_processed(self):
         """When the dict mixes empty and non-empty policy lists, only tables with policies get ENABLE RLS."""
-        from rls import schemas
-
         policy = schemas.Permissive(
             condition_args=[
                 schemas.ConditionArg(
