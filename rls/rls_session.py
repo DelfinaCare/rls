@@ -277,7 +277,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
             super().execute(stmt)
             self._rls_dirty = False
 
-    def begin(self) -> RlsSessionTransaction:
+    def begin(self) -> RlsSessionTransaction:  # type: ignore[override]
         return RlsSessionTransaction(super().begin(), self)
 
     def execute(self, *args, **kwargs):
@@ -322,7 +322,7 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             await super().execute(stmt)
             self._rls_dirty = False
 
-    def begin(self) -> RlsAsyncSessionTransaction:
+    def begin(self) -> RlsAsyncSessionTransaction:  # type: ignore[override]
         return RlsAsyncSessionTransaction(super().begin(), self)
 
     async def execute(self, *args, **kwargs):
