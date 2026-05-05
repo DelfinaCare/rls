@@ -6,7 +6,7 @@ import sqlalchemy
 from sqlalchemy import orm
 from sqlalchemy import sql
 
-from rls import alembic_rls
+from rls import alembic_ops
 from rls import schemas
 
 
@@ -38,54 +38,54 @@ def _make_boolean_policy(**kwargs):
 
 class TestEnableRlsOp(unittest.TestCase):
     def test_init_without_schema(self):
-        op = alembic_rls.EnableRlsOp("users")
+        op = alembic_ops.EnableRlsOp("users")
         self.assertEqual(op.tablename, "users")
         self.assertIsNone(op.schemaname)
 
     def test_init_with_schema(self):
-        op = alembic_rls.EnableRlsOp("users", schemaname="myschema")
+        op = alembic_ops.EnableRlsOp("users", schemaname="myschema")
         self.assertEqual(op.tablename, "users")
         self.assertEqual(op.schemaname, "myschema")
 
     def test_classmethod_invokes_operation(self):
         ops = _mock_operations()
-        alembic_rls.EnableRlsOp.enable_rls(ops, "users")
+        alembic_ops.EnableRlsOp.enable_rls(ops, "users")
         ops.invoke.assert_called_once()
         invoked_op = ops.invoke.call_args[0][0]
-        self.assertIsInstance(invoked_op, alembic_rls.EnableRlsOp)
+        self.assertIsInstance(invoked_op, alembic_ops.EnableRlsOp)
         self.assertEqual(invoked_op.tablename, "users")
 
     def test_reverse_returns_disable_op(self):
-        op = alembic_rls.EnableRlsOp("users", schemaname="myschema")
+        op = alembic_ops.EnableRlsOp("users", schemaname="myschema")
         rev = op.reverse()
-        self.assertIsInstance(rev, alembic_rls.DisableRlsOp)
+        self.assertIsInstance(rev, alembic_ops.DisableRlsOp)
         self.assertEqual(rev.tablename, "users")
         self.assertEqual(rev.schemaname, "myschema")
 
 
 class TestDisableRlsOp(unittest.TestCase):
     def test_init_without_schema(self):
-        op = alembic_rls.DisableRlsOp("users")
+        op = alembic_ops.DisableRlsOp("users")
         self.assertEqual(op.tablename, "users")
         self.assertIsNone(op.schemaname)
 
     def test_init_with_schema(self):
-        op = alembic_rls.DisableRlsOp("users", schemaname="myschema")
+        op = alembic_ops.DisableRlsOp("users", schemaname="myschema")
         self.assertEqual(op.tablename, "users")
         self.assertEqual(op.schemaname, "myschema")
 
     def test_classmethod_invokes_operation(self):
         ops = _mock_operations()
-        alembic_rls.DisableRlsOp.disable_rls(ops, "items")
+        alembic_ops.DisableRlsOp.disable_rls(ops, "items")
         ops.invoke.assert_called_once()
         invoked_op = ops.invoke.call_args[0][0]
-        self.assertIsInstance(invoked_op, alembic_rls.DisableRlsOp)
+        self.assertIsInstance(invoked_op, alembic_ops.DisableRlsOp)
         self.assertEqual(invoked_op.tablename, "items")
 
     def test_reverse_returns_enable_op(self):
-        op = alembic_rls.DisableRlsOp("items", schemaname="s")
+        op = alembic_ops.DisableRlsOp("items", schemaname="s")
         rev = op.reverse()
-        self.assertIsInstance(rev, alembic_rls.EnableRlsOp)
+        self.assertIsInstance(rev, alembic_ops.EnableRlsOp)
         self.assertEqual(rev.tablename, "items")
         self.assertEqual(rev.schemaname, "s")
 
@@ -93,16 +93,16 @@ class TestDisableRlsOp(unittest.TestCase):
 class TestEnableRlsImpl(unittest.TestCase):
     def test_without_schema(self):
         ops = _mock_operations()
-        operation = alembic_rls.EnableRlsOp("users")
-        alembic_rls.enable_rls(ops, operation)
+        operation = alembic_ops.EnableRlsOp("users")
+        alembic_ops.enable_rls(ops, operation)
         ops.execute.assert_called_once_with(
             "ALTER TABLE users ENABLE ROW LEVEL SECURITY"
         )
 
     def test_with_schema(self):
         ops = _mock_operations()
-        operation = alembic_rls.EnableRlsOp("users", schemaname="myschema")
-        alembic_rls.enable_rls(ops, operation)
+        operation = alembic_ops.EnableRlsOp("users", schemaname="myschema")
+        alembic_ops.enable_rls(ops, operation)
         ops.execute.assert_called_once_with(
             "ALTER TABLE myschema.users ENABLE ROW LEVEL SECURITY"
         )
@@ -111,16 +111,16 @@ class TestEnableRlsImpl(unittest.TestCase):
 class TestDisableRlsImpl(unittest.TestCase):
     def test_without_schema(self):
         ops = _mock_operations()
-        operation = alembic_rls.DisableRlsOp("users")
-        alembic_rls.disable_rls(ops, operation)
+        operation = alembic_ops.DisableRlsOp("users")
+        alembic_ops.disable_rls(ops, operation)
         ops.execute.assert_called_once_with(
             "ALTER TABLE users DISABLE ROW LEVEL SECURITY"
         )
 
     def test_with_schema(self):
         ops = _mock_operations()
-        operation = alembic_rls.DisableRlsOp("users", schemaname="myschema")
-        alembic_rls.disable_rls(ops, operation)
+        operation = alembic_ops.DisableRlsOp("users", schemaname="myschema")
+        alembic_ops.disable_rls(ops, operation)
         ops.execute.assert_called_once_with(
             "ALTER TABLE myschema.users DISABLE ROW LEVEL SECURITY"
         )
@@ -129,16 +129,16 @@ class TestDisableRlsImpl(unittest.TestCase):
 class TestAddRlsImports(unittest.TestCase):
     def test_adds_expected_imports(self):
         ctx = _mock_autogen_context()
-        alembic_rls._add_rls_imports(ctx)
+        alembic_ops._add_rls_imports(ctx)
         self.assertIn("import typing", ctx.imports)
-        self.assertIn("from rls import alembic_rls", ctx.imports)
+        self.assertIn("from rls import alembic_ops", ctx.imports)
 
 
 class TestRenderEnableRls(unittest.TestCase):
     def test_output(self):
         ctx = _mock_autogen_context()
-        op = alembic_rls.EnableRlsOp("users")
-        result = alembic_rls.render_enable_rls(ctx, op)
+        op = alembic_ops.EnableRlsOp("users")
+        result = alembic_ops.render_enable_rls(ctx, op)
         self.assertIn("enable_rls", result)
         self.assertIn("'users'", result)
         self.assertIn("import typing", ctx.imports)
@@ -147,8 +147,8 @@ class TestRenderEnableRls(unittest.TestCase):
 class TestRenderDisableRls(unittest.TestCase):
     def test_output(self):
         ctx = _mock_autogen_context()
-        op = alembic_rls.DisableRlsOp("items")
-        result = alembic_rls.render_disable_rls(ctx, op)
+        op = alembic_ops.DisableRlsOp("items")
+        result = alembic_ops.render_disable_rls(ctx, op)
         self.assertIn("disable_rls", result)
         self.assertIn("'items'", result)
         self.assertIn("import typing", ctx.imports)
@@ -156,7 +156,7 @@ class TestRenderDisableRls(unittest.TestCase):
 
 class TestCreatePolicyOp(unittest.TestCase):
     def test_init(self):
-        op = alembic_rls.CreatePolicyOp(
+        op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
@@ -171,7 +171,7 @@ class TestCreatePolicyOp(unittest.TestCase):
 
     def test_classmethod_invokes_operation(self):
         ops = _mock_operations()
-        alembic_rls.CreatePolicyOp.create_policy(
+        alembic_ops.CreatePolicyOp.create_policy(
             ops,
             table_name="users",
             definition="PERMISSIVE",
@@ -181,12 +181,12 @@ class TestCreatePolicyOp(unittest.TestCase):
         )
         ops.invoke.assert_called_once()
         invoked_op = ops.invoke.call_args[0][0]
-        self.assertIsInstance(invoked_op, alembic_rls.CreatePolicyOp)
+        self.assertIsInstance(invoked_op, alembic_ops.CreatePolicyOp)
         self.assertEqual(invoked_op.table_name, "users")
         self.assertEqual(invoked_op.policy_name, "pol1")
 
     def test_reverse_returns_drop_policy_op(self):
-        op = alembic_rls.CreatePolicyOp(
+        op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
@@ -194,7 +194,7 @@ class TestCreatePolicyOp(unittest.TestCase):
             expr="id = 1",
         )
         rev = op.reverse()
-        self.assertIsInstance(rev, alembic_rls.DropPolicyOp)
+        self.assertIsInstance(rev, alembic_ops.DropPolicyOp)
         self.assertEqual(rev.table_name, "users")
         self.assertEqual(rev.policy_name, "pol1")
         self.assertEqual(rev.definition, "PERMISSIVE")
@@ -204,7 +204,7 @@ class TestCreatePolicyOp(unittest.TestCase):
 
 class TestDropPolicyOp(unittest.TestCase):
     def test_init(self):
-        op = alembic_rls.DropPolicyOp(
+        op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
@@ -216,7 +216,7 @@ class TestDropPolicyOp(unittest.TestCase):
 
     def test_classmethod_invokes_operation(self):
         ops = _mock_operations()
-        alembic_rls.DropPolicyOp.drop_policy(
+        alembic_ops.DropPolicyOp.drop_policy(
             ops,
             table_name="users",
             policy_name="pol1",
@@ -226,11 +226,11 @@ class TestDropPolicyOp(unittest.TestCase):
         )
         ops.invoke.assert_called_once()
         invoked_op = ops.invoke.call_args[0][0]
-        self.assertIsInstance(invoked_op, alembic_rls.DropPolicyOp)
+        self.assertIsInstance(invoked_op, alembic_ops.DropPolicyOp)
         self.assertEqual(invoked_op.table_name, "users")
 
     def test_reverse_returns_create_policy_op(self):
-        op = alembic_rls.DropPolicyOp(
+        op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
@@ -238,7 +238,7 @@ class TestDropPolicyOp(unittest.TestCase):
             expr="id = 1",
         )
         rev = op.reverse()
-        self.assertIsInstance(rev, alembic_rls.CreatePolicyOp)
+        self.assertIsInstance(rev, alembic_ops.CreatePolicyOp)
         self.assertEqual(rev.table_name, "users")
         self.assertEqual(rev.policy_name, "pol1")
         self.assertEqual(rev.definition, "PERMISSIVE")
@@ -249,14 +249,14 @@ class TestDropPolicyOp(unittest.TestCase):
 class TestCreatePolicyImpl(unittest.TestCase):
     def test_executes_generated_sql(self):
         ops = _mock_operations()
-        operation = alembic_rls.CreatePolicyOp(
+        operation = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
-        alembic_rls.create_policy(ops, operation)
+        alembic_ops.create_policy(ops, operation)
         ops.execute.assert_called_once()
         executed_arg = ops.execute.call_args[0][0]
         sql_text = str(executed_arg)
@@ -267,28 +267,28 @@ class TestCreatePolicyImpl(unittest.TestCase):
 class TestDropPolicyImpl(unittest.TestCase):
     def test_executes_drop_sql(self):
         ops = _mock_operations()
-        operation = alembic_rls.DropPolicyOp(
+        operation = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
-        alembic_rls.drop_policy(ops, operation)
+        alembic_ops.drop_policy(ops, operation)
         ops.execute.assert_called_once_with("DROP POLICY pol1 ON users;")
 
 
 class TestRenderCreatePolicy(unittest.TestCase):
     def test_output(self):
         ctx = _mock_autogen_context()
-        op = alembic_rls.CreatePolicyOp(
+        op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
-        result = alembic_rls.render_create_policy(ctx, op)
+        result = alembic_ops.render_create_policy(ctx, op)
         self.assertIn("create_policy", result)
         self.assertIn("'users'", result)
         self.assertIn("'pol1'", result)
@@ -300,14 +300,14 @@ class TestRenderCreatePolicy(unittest.TestCase):
 class TestRenderDropPolicy(unittest.TestCase):
     def test_output(self):
         ctx = _mock_autogen_context()
-        op = alembic_rls.DropPolicyOp(
+        op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
             definition="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
-        result = alembic_rls.render_drop_policy(ctx, op)
+        result = alembic_ops.render_drop_policy(ctx, op)
         self.assertIn("drop_policy", result)
         self.assertIn("'users'", result)
         self.assertIn("'pol1'", result)
@@ -316,10 +316,10 @@ class TestRenderDropPolicy(unittest.TestCase):
 
 class TestCmdValue(unittest.TestCase):
     def test_with_enum(self):
-        self.assertEqual(alembic_rls._cmd_value(schemas.Command.select), "SELECT")
+        self.assertEqual(alembic_ops._cmd_value(schemas.Command.select), "SELECT")
 
     def test_with_string(self):
-        self.assertEqual(alembic_rls._cmd_value("ALL"), "ALL")
+        self.assertEqual(alembic_ops._cmd_value("ALL"), "ALL")
 
 
 class TestSetMetadataInfo(unittest.TestCase):
@@ -329,7 +329,7 @@ class TestSetMetadataInfo(unittest.TestCase):
         Base = models.Base
         # set_metadata_info is already called by register_rls, but we call it
         # explicitly to verify the behavior.
-        result = alembic_rls.set_metadata_info(Base)
+        result = alembic_ops.set_metadata_info(Base)
         self.assertIs(result, Base)
         self.assertIn("rls_policies", Base.metadata.info)
         self.assertIn("users", Base.metadata.info["rls_policies"])
@@ -344,7 +344,7 @@ class TestSetMetadataInfo(unittest.TestCase):
             id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
 
         self.assertIn(NoRls.__tablename__, Base.metadata.tables)
-        alembic_rls.set_metadata_info(Base)
+        alembic_ops.set_metadata_info(Base)
         self.assertEqual(Base.metadata.info["rls_policies"], {})
 
 
@@ -381,16 +381,16 @@ class TestCompareTableLevel(unittest.TestCase):
         # Patch the DB-checking helpers
         with (
             mock.patch.object(
-                alembic_rls, "check_table_exists", return_value=table_exists
+                alembic_ops, "check_table_exists", return_value=table_exists
             ),
             mock.patch.object(
-                alembic_rls, "check_rls_enabled", return_value=rls_enabled
+                alembic_ops, "check_rls_enabled", return_value=rls_enabled
             ),
             mock.patch.object(
-                alembic_rls, "check_rls_policies", return_value=db_policies
+                alembic_ops, "check_rls_policies", return_value=db_policies
             ),
         ):
-            alembic_rls.compare_table_level(
+            alembic_ops.compare_table_level(
                 autogen_ctx,
                 modify_ops,
                 schemaname,
@@ -410,7 +410,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         enable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.EnableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
         ]
         self.assertEqual(len(enable_ops), 1)
 
@@ -421,7 +421,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={},  # users not present => rls_enabled_meta is False
         )
         disable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.DisableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.DisableRlsOp)
         ]
         self.assertEqual(len(disable_ops), 1)
 
@@ -442,10 +442,10 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         enable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.EnableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
         ]
         disable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.DisableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.DisableRlsOp)
         ]
         self.assertEqual(len(enable_ops), 0)
         self.assertEqual(len(disable_ops), 0)
@@ -460,7 +460,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         create_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.CreatePolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
         ]
         self.assertEqual(len(create_ops), 1)
         self.assertEqual(create_ops[0].table_name, "users")
@@ -479,7 +479,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": []},
         )
         drop_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.DropPolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.DropPolicyOp)
         ]
         self.assertEqual(len(drop_ops), 1)
         self.assertEqual(drop_ops[0].policy_name, "orphan_policy")
@@ -504,10 +504,10 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         drop_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.DropPolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.DropPolicyOp)
         ]
         create_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.CreatePolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
         ]
         self.assertGreaterEqual(len(drop_ops), 1)
         self.assertGreaterEqual(len(create_ops), 1)
@@ -526,7 +526,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         create_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.CreatePolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
         ]
         self.assertEqual(len(create_ops), 2)
 
@@ -542,7 +542,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": [policy]},
         )
         create_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.CreatePolicyOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
         ]
         self.assertEqual(len(create_ops), 1)
         self.assertEqual(create_ops[0].cmd, "SELECT")
@@ -559,7 +559,7 @@ class TestCompareTableLevel(unittest.TestCase):
         )
         # Should get an enable op since DB doesn't have RLS
         enable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.EnableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
         ]
         self.assertEqual(len(enable_ops), 1)
 
@@ -571,7 +571,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": []},
         )
         enable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.EnableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
         ]
         self.assertEqual(len(enable_ops), 0)
 
@@ -584,7 +584,7 @@ class TestCompareTableLevel(unittest.TestCase):
             meta_policies={"users": []},
         )
         disable_ops = [
-            op for op in modify_ops.ops if isinstance(op, alembic_rls.DisableRlsOp)
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.DisableRlsOp)
         ]
         self.assertEqual(len(disable_ops), 1)
 

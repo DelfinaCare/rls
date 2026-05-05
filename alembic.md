@@ -6,10 +6,19 @@ alembic must be initialized by our extended metadata first to be used when creat
 
 the rls policies are registered as metadata info and can be used with alembic
 
-in the `env.py` file you must import the `set_metadata_info` from the package and pass it to the `target_metadata` variable
+in the `env.py` file you can use `register_alembic` to register your base, which is the recommended approach:
 
 ```python
-from rls.alembic_rls import set_metadata_info
+from rls import register_alembic
+
+register_alembic.register_alembic(Base)
+target_metadata = Base.metadata
+```
+
+Alternatively, you can call `set_metadata_info` from `alembic_ops` directly:
+
+```python
+from rls.alembic_ops import set_metadata_info
 
 target_metadata = set_metadata_info(Base).metadata
 ```

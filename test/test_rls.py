@@ -5,8 +5,8 @@ import sqlalchemy
 import sqlalchemy.exc
 from sqlalchemy import orm
 
-from rls import rls_session
 from rls import rls_sessioner
+from rls import session
 from test import database
 from test import expectations
 from test import models
@@ -16,14 +16,14 @@ _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
-def rls_setting(session: rls_session.RlsSession, setting_name: str) -> str | None:
+def rls_setting(session: session.RlsSession, setting_name: str) -> str | None:
     """Reads a PostgreSQL RLS session setting value."""
     return orm.Session.execute(
         session, sqlalchemy.text(f"SELECT current_setting('rls.{setting_name}', true);")
     ).scalar()
 
 
-def rls_bypassed(session: rls_session.RlsSession) -> bool:
+def rls_bypassed(session: session.RlsSession) -> bool:
     """Returns True if RLS is currently bypassed in the session."""
     str_value = rls_setting(session, "bypass_rls")
     if str_value == "true":
@@ -47,8 +47,8 @@ class SyncRLSTests(unittest.TestCase):
         cls.engine.dispose()
         cls.instance.close()
 
-    def _new_session(self, account_id: int = 1) -> rls_session.RlsSession:
-        return rls_session.RlsSession(
+    def _new_session(self, account_id: int = 1) -> session.RlsSession:
+        return session.RlsSession(
             context=models.SampleRlsContext(account_id=account_id),
             bind=self.engine,
         )
@@ -96,7 +96,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_rls_query_with_rls_session_and_bypass(self):
         context = models.SampleRlsContext(account_id=1)
 
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
 
         with rls_sess.begin():
             # Test Policy on table users with SELECT where (id = account_id)
@@ -116,7 +116,7 @@ class SyncRLSTests(unittest.TestCase):
                 return models.SampleRlsContext(account_id=account_id)
 
         session_maker = orm.sessionmaker(
-            class_=rls_session.RlsSession,
+            class_=session.RlsSession,
             autoflush=False,
             autocommit=False,
             bind=self.engine,
@@ -125,12 +125,12 @@ class SyncRLSTests(unittest.TestCase):
             sessionmaker=session_maker, context_getter=ExampleContextGetter()
         )
 
-        with my_sessioner(account_id=1) as session:
-            res = list(session.execute(_USER_ID_QUERY).scalars())
+        with my_sessioner(account_id=1) as rls_sess:
+            res = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(res, [1])
 
-            with session.bypass_rls():
-                res = list(session.execute(_USER_ID_QUERY).scalars())
+            with rls_sess.bypass_rls():
+                res = list(rls_sess.execute(_USER_ID_QUERY).scalars())
                 self.assertEqual(res, [1, 2])
 
     def test_bypass_rls_setting_single(self):
@@ -250,7 +250,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_none_context_field_clears_rls_setting(self):
         """A nullable pydantic field set to None filters all rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -259,7 +259,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_none_context_field_filters_results(self):
         """A nullable pydantic field set to None returns no rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -267,7 +267,7 @@ class SyncRLSTests(unittest.TestCase):
 
     def test_none_context_returns_no_rows(self):
         """Passing context=None to RlsSession returns no rows."""
-        rls_sess = rls_session.RlsSession(context=None, bind=self.engine)
+        rls_sess = session.RlsSession(context=None, bind=self.engine)
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when context is None.")
@@ -276,7 +276,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_mutable_context_change_reapplies_rls_setting(self):
         """Changing a mutable context field triggers RLS setting re-application."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(first_rows, [1])
@@ -288,7 +288,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
@@ -299,7 +299,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             second_rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
@@ -451,7 +451,7 @@ class SyncRLSTests(unittest.TestCase):
             account_id: str
 
         context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
 
         with rls_sess.begin():
             rls_sess.execute(_NOOP_QUERY)
@@ -483,8 +483,8 @@ class SyncRLSTests(unittest.TestCase):
         """begin() returns an RlsSessionTransaction, not the session itself."""
         rls_sess = self._new_session()
         with rls_sess.begin() as tx:
-            self.assertIsInstance(tx, rls_session.RlsSessionTransaction)
-            self.assertNotIsInstance(tx, rls_session.RlsSession)
+            self.assertIsInstance(tx, session.RlsSessionTransaction)
+            self.assertNotIsInstance(tx, session.RlsSession)
         rls_sess.close()
 
     def test_transaction_session_property(self):
@@ -615,7 +615,7 @@ class SyncRLSTests(unittest.TestCase):
     def test_transaction_mutable_context_reapplied(self):
         """Changing a mutable context mid-transaction re-applies RLS."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
+        rls_sess = session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
             first = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(first, [1])

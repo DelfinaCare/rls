@@ -7,7 +7,7 @@ import starlette.requests
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from rls import rls_session
+from rls import session
 
 
 class ContextGetter(abc.ABC):
@@ -18,12 +18,12 @@ class ContextGetter(abc.ABC):
 
 class RlsSessioner:
     def __init__(self, sessionmaker: orm.sessionmaker, context_getter: ContextGetter):
-        if not issubclass(sessionmaker.class_, rls_session.RlsSession):
+        if not issubclass(sessionmaker.class_, session.RlsSession):
             raise ValueError(
                 "sessionmaker class must be RlsSession or a subclass of RlsSession"
             )
 
-        self.session_maker: orm.sessionmaker[rls_session.RlsSession] = sessionmaker
+        self.session_maker: orm.sessionmaker[session.RlsSession] = sessionmaker
         self.context_getter: ContextGetter = context_getter
 
     @contextlib.contextmanager
@@ -45,13 +45,13 @@ class AsyncRlsSessioner:
         sessionmaker: sa_asyncio.async_sessionmaker,
         context_getter: ContextGetter,
     ):
-        if not issubclass(sessionmaker.class_, rls_session.AsyncRlsSession):
+        if not issubclass(sessionmaker.class_, session.AsyncRlsSession):
             raise ValueError(
                 "sessionmaker class must be AsyncRlsSession or a subclass of AsyncRlsSession"
             )
 
         self.session_maker: sa_asyncio.async_sessionmaker[
-            rls_session.AsyncRlsSession
+            session.AsyncRlsSession
         ] = sessionmaker
         self.context_getter: ContextGetter = context_getter
 

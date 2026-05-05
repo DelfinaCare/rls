@@ -6,7 +6,7 @@ import sqlalchemy
 import sqlalchemy.exc
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from rls import rls_session
+from rls import session
 from test import database
 from test import models
 
@@ -16,7 +16,7 @@ _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
 
 
 async def rls_setting(
-    session: rls_session.AsyncRlsSession, setting_name: str
+    session: session.AsyncRlsSession, setting_name: str
 ) -> str | None:
     """Reads a PostgreSQL RLS session setting value."""
     result = await sa_asyncio.AsyncSession.execute(
@@ -25,7 +25,7 @@ async def rls_setting(
     return result.scalar()
 
 
-async def rls_bypassed(session: rls_session.AsyncRlsSession) -> bool:
+async def rls_bypassed(session: session.AsyncRlsSession) -> bool:
     """Returns True if RLS is currently bypassed in the session."""
     str_value = await rls_setting(session, "bypass_rls")
     if str_value == "true":
@@ -49,8 +49,8 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         asyncio.run(cls.engine.dispose())
         cls.instance.close()
 
-    def _new_session(self, account_id: int = 1) -> rls_session.AsyncRlsSession:
-        return rls_session.AsyncRlsSession(
+    def _new_session(self, account_id: int = 1) -> session.AsyncRlsSession:
+        return session.AsyncRlsSession(
             context=models.SampleRlsContext(account_id=account_id),
             bind=self.engine,
         )
@@ -58,7 +58,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_rls_query_with_async_rls_session(self):
         """AsyncRlsSession applies RLS and returns only the matching user."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
@@ -67,7 +67,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_rls_query_with_async_rls_session_and_bypass(self):
         """AsyncRlsSession with bypass_rls returns all users."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
                 result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
@@ -150,7 +150,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_none_context_field_clears_rls_setting(self):
         """A nullable pydantic field set to None filters all rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -159,7 +159,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_none_context_field_filters_results(self):
         """A nullable pydantic field set to None returns no rows."""
         context = models.SampleRlsContext(account_id=None)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
@@ -167,7 +167,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_none_context_returns_no_rows(self):
         """Passing context=None to AsyncRlsSession returns no rows."""
-        rls_sess = rls_session.AsyncRlsSession(context=None, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=None, bind=self.engine)
         async with rls_sess.begin():
             rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(rows, [], "Expected no rows when context is None.")
@@ -176,7 +176,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_mutable_context_change_reapplies_rls_setting(self):
         """Changing a mutable context field triggers RLS setting re-application."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(first_rows, [1])
@@ -188,7 +188,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_immutable_context_only_sets_rls_setting_once_per_transaction(self):
         """An immutable context avoids redundant RLS setting re-application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
 
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
@@ -200,7 +200,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_immutable_context_skips_equality_check_when_clean(self):
         """Immutable contexts skip equality checks after initial application."""
         context = models.ImmutableEqGuardRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             first_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             second_rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
@@ -405,7 +405,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
             account_id: str
 
         context = StringContext(account_id=_MALICIOUS_CONTEXT_VALUE)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
 
         async with rls_sess.begin():
             await rls_sess.execute(_NOOP_QUERY)
@@ -439,7 +439,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """begin() returns an RlsAsyncSessionTransaction, not a raw AsyncSessionTransaction."""
         rls_sess = self._new_session()
         async with rls_sess.begin() as tx:
-            self.assertIsInstance(tx, rls_session.RlsAsyncSessionTransaction)
+            self.assertIsInstance(tx, session.RlsAsyncSessionTransaction)
             self.assertNotIsInstance(tx, sa_asyncio.AsyncSessionTransaction)
         await rls_sess.close()
 
@@ -565,7 +565,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Awaiting begin() returns an RlsAsyncSessionTransaction."""
         rls_sess = self._new_session()
         tx = await rls_sess.begin()
-        self.assertIsInstance(tx, rls_session.RlsAsyncSessionTransaction)
+        self.assertIsInstance(tx, session.RlsAsyncSessionTransaction)
         await tx.rollback()
         await rls_sess.close()
 
@@ -581,7 +581,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_transaction_mutable_context_reapplied(self):
         """Changing a mutable context mid-transaction re-applies RLS."""
         context = models.SampleRlsContext(account_id=1)
-        rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
+        rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
             first = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(first, [1])

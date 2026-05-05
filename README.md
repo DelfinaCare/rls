@@ -112,16 +112,21 @@ This restricts rows to those whose `owner_id` matches the value of `account_id` 
 
 #### Alembic
 
-RLS policies are stored as SQLAlchemy metadata and managed through Alembic migrations. In your `env.py`, replace the standard metadata assignment:
+RLS policies are stored as SQLAlchemy metadata and managed through Alembic migrations. In your `env.py`, call `register_alembic` to wire up your base:
 
 ```python
+from rls import register_alembic
+
+register_alembic.register_alembic(Base)
 target_metadata = Base.metadata
 ```
 
-with the RLS wrapper:
+`register_alembic` makes RLS policy metadata available to Alembic's autogenerate without creating any policies at the database level — policy creation is handled exclusively through migrations.
+
+Alternatively, you can call `set_metadata_info` directly:
 
 ```python
-from rls.alembic_rls import set_metadata_info
+from rls.alembic_ops import set_metadata_info
 
 target_metadata = set_metadata_info(Base).metadata
 ```
@@ -161,7 +166,7 @@ For applications that build a session per request or operation, `RlsSessioner` w
 
 ```python
 from sqlalchemy.orm import sessionmaker
-from rls.rls_session import RlsSession
+from rls.session import RlsSession
 from rls.rls_sessioner import RlsSessioner, ContextGetter
 from pydantic import BaseModel
 from test.engines import sync_engine as engine

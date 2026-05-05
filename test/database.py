@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 import testing.postgresql
 
+from rls import create_policies
 from test import models
 
 
@@ -25,6 +26,8 @@ def test_postgres_instance() -> TestPostgres:
     inst.admin_engine = sa.create_engine(inst.admin_url)
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
+    with connection.begin():
+        create_policies.create_policies(models.Base, connection)
 
     # Seed data
     user_values = []

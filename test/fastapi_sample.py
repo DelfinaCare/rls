@@ -5,8 +5,8 @@ import sqlalchemy as sa
 import starlette.requests
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from rls import rls_session
 from rls import rls_sessioner
+from rls import session
 from test import database
 from test import models
 
@@ -25,7 +25,7 @@ class SampleContextGetter(rls_sessioner.ContextGetter):
 
 # We then create a sessioner as a fastapi dependency to do the injection.
 session_maker = sa.orm.sessionmaker(
-    class_=rls_session.RlsSession, autoflush=False, autocommit=False
+    class_=session.RlsSession, autoflush=False, autocommit=False
 )
 demo_sessioner = fastapi.Depends(
     rls_sessioner.fastapi_dependency_function(
@@ -37,7 +37,7 @@ demo_sessioner = fastapi.Depends(
 
 # Async variant using AsyncRlsSession.
 async_session_maker = sa_asyncio.async_sessionmaker(
-    class_=rls_session.AsyncRlsSession, autoflush=False, autocommit=False
+    class_=session.AsyncRlsSession, autoflush=False, autocommit=False
 )
 async_demo_sessioner = fastapi.Depends(
     rls_sessioner.async_fastapi_dependency_function(
@@ -76,7 +76,7 @@ def get_users(db=demo_sessioner, account_id: int | None = None) -> list[str]:
 
 @app.get("/all_users")
 def get_all_users(
-    db: rls_session.RlsSession = demo_sessioner, account_id: int | None = None
+    db: session.RlsSession = demo_sessioner, account_id: int | None = None
 ) -> list[str]:
     del account_id
     with db.bypass_rls():
@@ -88,7 +88,7 @@ def get_all_users(
 
 @app.get("/async/users")
 async def async_get_users(
-    db: rls_session.AsyncRlsSession = async_demo_sessioner,
+    db: session.AsyncRlsSession = async_demo_sessioner,
     account_id: int | None = None,
 ) -> list[str]:
     del account_id
@@ -99,7 +99,7 @@ async def async_get_users(
 
 @app.get("/async/all_users")
 async def async_get_all_users(
-    db: rls_session.AsyncRlsSession = async_demo_sessioner,
+    db: session.AsyncRlsSession = async_demo_sessioner,
     account_id: int | None = None,
 ) -> list[str]:
     del account_id

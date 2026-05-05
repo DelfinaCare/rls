@@ -6,10 +6,10 @@ from sqlalchemy import orm
 from sqlalchemy import sql
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from rls import register_rls
+from rls import register_alembic
 from rls import schemas
 
-Base: typing.Any = register_rls.register_rls(orm.declarative_base())
+Base: typing.Any = register_alembic.register_alembic(orm.declarative_base())
 
 
 class User(sa_asyncio.AsyncAttrs, Base):

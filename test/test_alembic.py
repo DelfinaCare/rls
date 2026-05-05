@@ -8,7 +8,7 @@ from alembic import command
 from alembic import config as alembic_config
 from alembic.runtime import migration
 
-from rls import alembic_rls
+from rls import alembic_ops
 from test import expectations
 from test import models
 
@@ -92,7 +92,7 @@ class TestAlembicOperations(unittest.TestCase):
         """After applying migrations, autogenerating again should produce no changes."""
         command.upgrade(self.alembic_cfg, "head")
 
-        target_metadata = alembic_rls.set_metadata_info(models.Base).metadata
+        target_metadata = alembic_ops.set_metadata_info(models.Base).metadata
         with self.admin_engine.connect() as conn:
             ctx = migration.MigrationContext.configure(conn)
             diffs = autogenerate.compare_metadata(ctx, target_metadata)
