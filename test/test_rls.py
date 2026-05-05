@@ -248,16 +248,12 @@ class SyncRLSTests(unittest.TestCase):
         rls_sess2.close()
 
     def test_none_context_field_clears_rls_setting(self):
-        """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
+        """A nullable pydantic field set to None filters all rows."""
         context = models.SampleRlsContext(account_id=None)
         rls_sess = rls_session.RlsSession(context=context, bind=self.engine)
         with rls_sess.begin():
-            setting = rls_setting(rls_sess, "account_id")
-            self.assertEqual(
-                setting,
-                "",
-                "RLS setting for a None context field must be reset to empty string.",
-            )
+            rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         rls_sess.close()
 
     def test_none_context_field_filters_results(self):
@@ -356,13 +352,6 @@ class SyncRLSTests(unittest.TestCase):
         self.assertFalse(rls_bypassed(rls_sess))
         rls_sess.close()
 
-    def test_begin_sets_rls_account_id_setting(self):
-        """begin() sets the rls.account_id pg setting to the context value."""
-        rls_sess = self._new_session(account_id=1)
-        with rls_sess.begin():
-            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
-        rls_sess.close()
-
     def test_scalar_sets_rls_settings(self):
         """scalar() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
@@ -382,7 +371,6 @@ class SyncRLSTests(unittest.TestCase):
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
             rls_sess.flush()
-            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
         rls_sess.close()
@@ -391,7 +379,6 @@ class SyncRLSTests(unittest.TestCase):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
         with rls_sess.begin():
-            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             users = list(
                 rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -448,7 +435,6 @@ class SyncRLSTests(unittest.TestCase):
             )
             self.assertEqual([u.id for u in users], [1])
             rls_sess.flush()
-            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
             users_after_flush = list(
                 rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -535,13 +521,6 @@ class SyncRLSTests(unittest.TestCase):
         with rls_sess.begin():
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
-        rls_sess.close()
-
-    def test_begin_sets_rls_setting_via_transaction(self):
-        """begin() sets the rls.account_id pg setting via the transaction wrapper."""
-        rls_sess = self._new_session(account_id=1)
-        with rls_sess.begin():
-            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
         rls_sess.close()
 
     def test_transaction_explicit_commit_sets_dirty(self):

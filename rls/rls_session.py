@@ -1,4 +1,3 @@
-import sys
 from collections import abc
 
 import pydantic
@@ -123,11 +122,7 @@ class RlsSessionTransaction:
 
     def __enter__(self) -> "RlsSessionTransaction":
         self._transaction.__enter__()
-        try:
-            self._session._execute_set_statements()
-        except BaseException:
-            self._transaction.__exit__(*sys.exc_info())
-            raise
+        self._session._rls_dirty = True
         return self
 
     def __exit__(self, type_: object, value: object, traceback: object) -> None:
@@ -189,7 +184,7 @@ class RlsAsyncSessionTransaction:
 
     async def start(self, is_ctxmanager: bool = False) -> "RlsAsyncSessionTransaction":
         await self._transaction.start(is_ctxmanager=is_ctxmanager)
-        await self._session._execute_set_statements()
+        self._session._rls_dirty = True
         return self
 
     def __await__(

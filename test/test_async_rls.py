@@ -148,16 +148,12 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         await rls_sess.close()
 
     async def test_none_context_field_clears_rls_setting(self):
-        """A nullable pydantic field set to None resets the corresponding RLS pg setting."""
+        """A nullable pydantic field set to None filters all rows."""
         context = models.SampleRlsContext(account_id=None)
         rls_sess = rls_session.AsyncRlsSession(context=context, bind=self.engine)
         async with rls_sess.begin():
-            setting = await rls_setting(rls_sess, "account_id")
-            self.assertEqual(
-                setting,
-                "",
-                "RLS setting for a None context field must be reset to empty string.",
-            )
+            rows = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         await rls_sess.close()
 
     async def test_none_context_field_filters_results(self):
@@ -304,13 +300,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await rls_bypassed(rls_sess))
         await rls_sess.close()
 
-    async def test_begin_sets_rls_account_id_setting(self):
-        """begin() sets the rls.account_id pg setting to the context value."""
-        rls_sess = self._new_session(account_id=1)
-        async with rls_sess.begin():
-            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
-        await rls_sess.close()
-
     async def test_scalar_sets_rls_settings(self):
         """scalar() applies RLS and returns only the account's user id."""
         rls_sess = self._new_session(account_id=1)
@@ -330,7 +319,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
             await rls_sess.flush()
-            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
         await rls_sess.close()
@@ -339,7 +327,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """begin() sets rls.account_id and ORM User query returns only the account's user."""
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
-            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             users = list(
                 await rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -402,7 +389,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual([u.id for u in users], [1])
             await rls_sess.flush()
-            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
             users_after_flush = list(
                 await rls_sess.scalars(
                     sqlalchemy.select(models.User).order_by(models.User.id)
@@ -491,13 +477,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         async with rls_sess.begin():
             result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
             self.assertEqual(result, [1])
-        await rls_sess.close()
-
-    async def test_begin_sets_rls_setting_via_transaction(self):
-        """begin() sets the rls.account_id pg setting via the async transaction wrapper."""
-        rls_sess = self._new_session(account_id=1)
-        async with rls_sess.begin():
-            self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
         await rls_sess.close()
 
     async def test_transaction_explicit_commit_sets_dirty(self):
@@ -594,7 +573,6 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Awaiting begin() also applies RLS settings."""
         rls_sess = self._new_session(account_id=1)
         tx = await rls_sess.begin()
-        self.assertEqual(await rls_setting(rls_sess, "account_id"), "1")
         result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
         self.assertEqual(result, [1])
         await tx.rollback()
