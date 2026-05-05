@@ -8,7 +8,9 @@ from rls import create_policies
 from rls import schemas
 
 
-def _make_base_with_policies(rls_policies: dict) -> type[sqlalchemy.orm.DeclarativeMeta]:
+def _make_base_with_policies(
+    rls_policies: dict,
+) -> type[sqlalchemy.orm.DeclarativeMeta]:
     """Return a declarative base whose metadata carries the given rls_policies dict."""
     Base: type[sqlalchemy.orm.DeclarativeMeta] = sqlalchemy.orm.declarative_base()
     Base.metadata.info["rls_policies"] = rls_policies
@@ -27,7 +29,9 @@ class TestCreatePolicies(unittest.TestCase):
         create_policies.create_policies(Base, conn)
 
         executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
-        enable_rls_calls = [s for s in executed_sqls if "ENABLE ROW LEVEL SECURITY" in s]
+        enable_rls_calls = [
+            s for s in executed_sqls if "ENABLE ROW LEVEL SECURITY" in s
+        ]
         self.assertEqual(
             len(enable_rls_calls),
             0,
@@ -85,7 +89,9 @@ class TestCreatePolicies(unittest.TestCase):
         create_policies.create_policies(Base, conn)
 
         executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
-        enable_rls_calls = [s for s in executed_sqls if "ENABLE ROW LEVEL SECURITY" in s]
+        enable_rls_calls = [
+            s for s in executed_sqls if "ENABLE ROW LEVEL SECURITY" in s
+        ]
         self.assertEqual(len(enable_rls_calls), 1)
         self.assertIn("table_with_policies", enable_rls_calls[0])
 
