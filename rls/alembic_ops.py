@@ -82,6 +82,7 @@ class RLSOp(typing.Protocol):
         definition: str,
         cmd: str,
         expr: str,
+        allow_bypass_rls: bool = True,
         **kw: typing.Any,
     ) -> None: ...
 
@@ -233,6 +234,7 @@ def compare_table_level(
                         policy_name=single_policy_name,
                         cmd=current_cmd,
                         expr=policy_expr,
+                        allow_bypass_rls=policy_meta.allow_bypass_rls,
                     )
                 )
 
@@ -261,6 +263,7 @@ def compare_table_level(
                             policy_name=single_policy_name,
                             cmd=current_cmd,
                             expr=policy_expr,
+                            allow_bypass_rls=policy_meta.allow_bypass_rls,
                         )
                     )
 
@@ -287,12 +290,13 @@ def compare_table_level(
 class CreatePolicyOp(alembic_operations.MigrateOperation):
     """Operation to create a new RLS policy."""
 
-    def __init__(self, table_name, policy_name, definition, cmd, expr):
+    def __init__(self, table_name, policy_name, definition, cmd, expr, allow_bypass_rls=True):
         self.table_name = table_name
         self.definition = definition
         self.cmd = cmd
         self.expr = expr
         self.policy_name = policy_name
+        self.allow_bypass_rls = allow_bypass_rls
 
     @classmethod
     def create_policy(cls, operations, table_name, definition, cmd, expr, **kw):
@@ -354,6 +358,7 @@ def create_policy(operations, operation):
     definition = operation.definition
     cmd = operation.cmd
     expr = operation.expr
+    allow_bypass_rls = operation.allow_bypass_rls
 
     # Generate the SQL to create the policy
     sql = _sql_gen.generate_rls_policy(
@@ -362,6 +367,7 @@ def create_policy(operations, operation):
         policy_name=policy_name,
         table_name=table_name,
         expr=expr,
+        allow_bypass_rls=allow_bypass_rls,
     )
 
     operations.execute(sql)

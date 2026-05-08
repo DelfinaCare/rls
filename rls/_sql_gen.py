@@ -11,9 +11,26 @@ def add_bypass_rls_to_expr(expr: str) -> str:
 
 
 def generate_rls_policy(
-    cmd: str, definition: str, policy_name: str, table_name: str, expr: str
+    cmd: str,
+    definition: str,
+    policy_name: str,
+    table_name: str,
+    expr: str,
+    allow_bypass_rls: bool = True,
 ) -> sqlalchemy.TextClause:
-    if "rls.bypass_rls" not in expr:
+    """Generate a SQL CREATE POLICY statement.
+
+    When *allow_bypass_rls* is ``True`` (the default) the policy expression is
+    augmented with an ``OR`` branch that grants access whenever the session
+    variable ``rls.bypass_rls`` is set to ``true``.  This lets callers
+    temporarily suspend row-level security for a small, audited block of code
+    (e.g. administrative queries) while relying on RLS for the rest of the
+    session.
+
+    Set *allow_bypass_rls* to ``False`` on policies where the bypass mechanism
+    must never apply, even for privileged callers.
+    """
+    if allow_bypass_rls and "rls.bypass_rls" not in expr:
         expr = add_bypass_rls_to_expr(expr)
 
     if cmd in ["ALL", "SELECT", "DELETE"]:

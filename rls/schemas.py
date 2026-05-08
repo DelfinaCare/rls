@@ -72,9 +72,12 @@ def policy_changed_checker(db_policy: "Policy", metadata_policy: "Policy") -> bo
     Returns True if the policies are equivalent, False otherwise.
     """
     temp_metadata_policy = metadata_policy.model_copy()
-    temp_metadata_policy.expression = _sql_gen.add_bypass_rls_to_expr(
-        metadata_policy.expression
-    )
+    if metadata_policy.allow_bypass_rls:
+        temp_metadata_policy.expression = _sql_gen.add_bypass_rls_to_expr(
+            metadata_policy.expression
+        )
+    else:
+        temp_metadata_policy.expression = metadata_policy.expression
 
     if isinstance(temp_metadata_policy.cmd, list):
         temp_metadata_policy.cmd = Command(temp_metadata_policy.cmd[0])
@@ -83,6 +86,22 @@ def policy_changed_checker(db_policy: "Policy", metadata_policy: "Policy") -> bo
 
 
 class Policy(pydantic.BaseModel):
+    """A single row-level security policy attached to a database table.
+
+    Parameters
+    ----------
+    allow_bypass_rls:
+        When ``True`` (the default) the generated policy expression is
+        augmented with an ``OR`` branch that allows any query to pass when
+        the session variable ``rls.bypass_rls`` is set to ``true``.  This
+        lets callers temporarily suspend RLS for a small, audited block of
+        code (e.g. administrative queries) while relying on RLS for the rest
+        of the session.
+
+        Set this to ``False`` to generate a strict policy where the bypass
+        mechanism is never honoured, even for privileged callers.
+    """
+
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
     definition: str
@@ -90,6 +109,7 @@ class Policy(pydantic.BaseModel):
     cmd: Command | list[Command]
     custom_expr: typing.Callable[..., elements.ColumnElement] | None = None
     custom_policy_name: str | None = None
+    allow_bypass_rls: bool = True
 
     _policy_names: list[str] = pydantic.PrivateAttr(default_factory=list)
     _expr: str = pydantic.PrivateAttr(default="")
@@ -143,6 +163,7 @@ class Policy(pydantic.BaseModel):
                 policy_name=policy_name,
                 table_name=table_name,
                 expr=self._expr,
+                allow_bypass_rls=self.allow_bypass_rls,
             )
             policy_lists.append(generated_policy)
         return policy_lists

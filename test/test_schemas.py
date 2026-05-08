@@ -248,6 +248,36 @@ class TestPolicyChangedChecker(unittest.TestCase):
         self.assertEqual(meta_policy.expression, original_expr)
         self.assertEqual(meta_policy.cmd, original_cmd)
 
+    def test_no_bypass_rls_matching_policies_returns_true(self):
+        """policy_changed_checker with allow_bypass_rls=False matches db policy without bypass expression."""
+        meta_policy = self._make_compiled_policy(allow_bypass_rls=False)
+
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        # DB policy has the raw expression without bypass_rls
+        db_policy.expression = meta_policy.expression
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertTrue(result)
+
+    def test_no_bypass_rls_with_bypass_in_db_returns_false(self):
+        """When allow_bypass_rls=False, a db policy with bypass expression is considered changed."""
+        meta_policy = self._make_compiled_policy(allow_bypass_rls=False)
+
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+        )
+        # DB policy was (incorrectly) created with bypass_rls expression
+        db_policy.expression = _sql_gen.add_bypass_rls_to_expr(meta_policy.expression)
+        result = schemas.policy_changed_checker(
+            db_policy=db_policy, metadata_policy=meta_policy
+        )
+        self.assertFalse(result)
+
 
 class TestPolicy(unittest.TestCase):
     def test_get_sql_policies_single_cmd(self):
@@ -333,6 +363,25 @@ class TestPolicy(unittest.TestCase):
         )
         results = policy.get_sql_policies(table_name="items")
         self.assertEqual(len(results), 1)
+
+    def test_allow_bypass_rls_true_includes_bypass_expression(self):
+        """allow_bypass_rls=True (default) adds bypass_rls OR clause to generated SQL."""
+        policy = _make_boolean_policy(allow_bypass_rls=True)
+        results = policy.get_sql_policies(table_name="users")
+        sql_text = str(results[0])
+        self.assertIn("bypass_rls", sql_text)
+
+    def test_allow_bypass_rls_false_excludes_bypass_expression(self):
+        """allow_bypass_rls=False omits bypass_rls OR clause from generated SQL."""
+        policy = _make_boolean_policy(allow_bypass_rls=False)
+        results = policy.get_sql_policies(table_name="users")
+        sql_text = str(results[0])
+        self.assertNotIn("bypass_rls", sql_text)
+
+    def test_allow_bypass_rls_default_is_true(self):
+        """allow_bypass_rls defaults to True."""
+        policy = _make_boolean_policy()
+        self.assertTrue(policy.allow_bypass_rls)
 
     def test_missing_custom_expr_raises(self):
         policy = schemas.Permissive(
