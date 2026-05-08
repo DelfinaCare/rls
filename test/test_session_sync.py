@@ -625,9 +625,17 @@ class SyncRLSTests(unittest.TestCase):
         rls_sess.close()
 
     def test_two_phase_commit_with_update(self):
-        """Two-phase commit (prepare + commit) with an UPDATE persists changes via both phases."""
+        """Two-phase commit (prepare + commit) with an UPDATE restricted by RLS.
+
+        The UPDATE targets all rows; RLS (account_id=1) silently restricts the
+        write to the single matching row.  The follow-up SELECT also uses no
+        WHERE clause — RLS is solely responsible for returning only that row.
+        """
+        # No WHERE clause: without RLS this would update both users.
+        # Use id-based value to avoid a unique-constraint violation if RLS
+        # unexpectedly allows both rows to be modified.
         update_stmt = sqlalchemy.text(
-            "UPDATE users SET username = 'updated_by_twophase' WHERE id = 1"
+            "UPDATE users SET username = 'twophase_' || id::text"
         )
         rls_sess = session.RlsSession(
             context=models.SampleRlsContext(account_id=1),
@@ -636,15 +644,19 @@ class SyncRLSTests(unittest.TestCase):
         )
         try:
             with rls_sess.begin():
+                # RLS limits the UPDATE to the row where id = 1.
                 rows_updated = rls_sess.execute(update_stmt).rowcount
                 self.assertEqual(rows_updated, 1)
                 rls_sess.prepare()  # First phase of two-phase commit
                 rls_sess.commit()  # Second phase of two-phase commit
             with rls_sess.begin():
-                username = rls_sess.execute(
-                    sqlalchemy.text("SELECT username FROM users WHERE id = 1")
-                ).scalar()
-            self.assertEqual(username, "updated_by_twophase")
+                # No WHERE clause: RLS restricts the result to account_id=1.
+                usernames = list(
+                    rls_sess.execute(
+                        sqlalchemy.text("SELECT username FROM users")
+                    ).scalars()
+                )
+            self.assertEqual(usernames, ["twophase_1"])
         finally:
             rls_sess.close()
             with self.instance.admin_engine.connect() as conn:
