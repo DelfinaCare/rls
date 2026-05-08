@@ -642,6 +642,10 @@ class SyncRLSTests(unittest.TestCase):
             bind=self.engine,
             twophase=True,
         )
+        rls_sess_acct2 = session.RlsSession(
+            context=models.SampleRlsContext(account_id=2),
+            bind=self.engine,
+        )
         try:
             with rls_sess.begin():
                 # RLS limits the UPDATE to the row where id = 1.
@@ -657,8 +661,17 @@ class SyncRLSTests(unittest.TestCase):
                     ).scalars()
                 )
             self.assertEqual(usernames, ["twophase_1"])
+            # Verify account_id=2's row was not affected by the UPDATE.
+            with rls_sess_acct2.begin():
+                usernames_acct2 = list(
+                    rls_sess_acct2.execute(
+                        sqlalchemy.text("SELECT username FROM users")
+                    ).scalars()
+                )
+            self.assertEqual(usernames_acct2, ["user2"])
         finally:
             rls_sess.close()
+            rls_sess_acct2.close()
             with self.instance.admin_engine.connect() as conn:
                 with conn.begin():
                     conn.execute(

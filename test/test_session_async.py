@@ -608,6 +608,10 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
             bind=self.engine,
             twophase=True,
         )
+        rls_sess_acct2 = session.AsyncRlsSession(
+            context=models.SampleRlsContext(account_id=2),
+            bind=self.engine,
+        )
         try:
             async with rls_sess.begin():
                 # RLS limits the UPDATE to the row where id = 1.
@@ -625,8 +629,19 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
                     ).scalars()
                 )
             self.assertEqual(usernames, ["twophase_1"])
+            # Verify account_id=2's row was not affected by the UPDATE.
+            async with rls_sess_acct2.begin():
+                usernames_acct2 = list(
+                    (
+                        await rls_sess_acct2.execute(
+                            sqlalchemy.text("SELECT username FROM users")
+                        )
+                    ).scalars()
+                )
+            self.assertEqual(usernames_acct2, ["user2"])
         finally:
             await rls_sess.close()
+            await rls_sess_acct2.close()
             with self.instance.admin_engine.connect() as conn:
                 with conn.begin():
                     conn.execute(
