@@ -209,6 +209,9 @@ class RlsAsyncSessionTransaction:
         await self._transaction.rollback()
         self._session._rls_dirty = True
 
+    async def prepare(self) -> None:
+        await self._session.prepare()
+
     @property
     def session(self) -> "AsyncRlsSession":
         return self._session
@@ -353,6 +356,9 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def rollback(self):
         await super().rollback()
         self._rls_dirty = True
+
+    async def prepare(self) -> None:
+        await self.run_sync(lambda sess: sess.prepare())
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
         return AsyncBypassRLSContext(self)

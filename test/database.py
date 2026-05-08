@@ -19,7 +19,9 @@ class TestPostgres:
 def test_postgres_instance() -> TestPostgres:
     """Returns a test postgres instance seeded with data."""
     inst = TestPostgres()
-    inst.postgresql = testing.postgresql.Postgresql()
+    inst.postgresql = testing.postgresql.Postgresql(
+        postgres_args="-h 127.0.0.1 -F -c logging_collector=off -c max_prepared_transactions=10"
+    )
     inst.admin_url = sa.engine.make_url(inst.postgresql.url()).set(
         drivername="postgresql+psycopg"
     )
@@ -58,7 +60,7 @@ def test_postgres_instance() -> TestPostgres:
             GRANT CONNECT ON DATABASE {database} TO {non_superadmin_user};
             GRANT USAGE ON SCHEMA public TO {non_superadmin_user};
             ALTER ROLE {non_superadmin_user} WITH LOGIN;
-            GRANT SELECT ON ALL TABLES IN SCHEMA public TO {non_superadmin_user};
+            GRANT SELECT, UPDATE ON ALL TABLES IN SCHEMA public TO {non_superadmin_user};
                                     """)
         )
     connection.close()

@@ -624,6 +624,37 @@ class SyncRLSTests(unittest.TestCase):
             self.assertEqual(second, [2])
         rls_sess.close()
 
+    def test_two_phase_commit_with_update(self):
+        """Two-phase commit (prepare + commit) with an UPDATE persists changes via both phases."""
+        update_stmt = sqlalchemy.text(
+            "UPDATE users SET username = 'updated_by_twophase' WHERE id = 1"
+        )
+        rls_sess = session.RlsSession(
+            context=models.SampleRlsContext(account_id=1),
+            bind=self.engine,
+            twophase=True,
+        )
+        try:
+            with rls_sess.begin():
+                rows_updated = rls_sess.execute(update_stmt).rowcount
+                self.assertEqual(rows_updated, 1)
+                rls_sess.prepare()  # First phase of two-phase commit
+                rls_sess.commit()  # Second phase of two-phase commit
+            with rls_sess.begin():
+                username = rls_sess.execute(
+                    sqlalchemy.text("SELECT username FROM users WHERE id = 1")
+                ).scalar()
+            self.assertEqual(username, "updated_by_twophase")
+        finally:
+            rls_sess.close()
+            with self.instance.admin_engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(
+                        sqlalchemy.text(
+                            "UPDATE users SET username = 'user1' WHERE id = 1"
+                        )
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
