@@ -153,6 +153,10 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session(account_id=1)
         async with rls_sess.begin():
             async with rls_sess.bypass_rls():
+                # Execute a no-op first so the bypass setting is flushed to
+                # PostgreSQL before the savepoint is created.  After the
+                # savepoint rolls back it will correctly restore bypass_rls=true.
+                await rls_sess.execute(_NOOP_QUERY)
                 # Catch the SQL error inside the bypass context using a savepoint
                 # so the outer transaction remains usable.
                 with self.assertRaises(sqlalchemy.exc.DataError):
