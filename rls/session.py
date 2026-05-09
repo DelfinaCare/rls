@@ -272,13 +272,8 @@ class RlsSession(_RlsSessionMixin, orm.Session):
             super().execute(stmt)
             self._rls_dirty = False
 
-    def begin(
-        self, nested: bool = False
-    ) -> "RlsSessionTransaction | orm.SessionTransaction":  # type: ignore[override]
-        tx = super().begin(nested=nested)
-        if nested:
-            return tx
-        return RlsSessionTransaction(tx, self)
+    def begin(self, nested: bool = False) -> "RlsSessionTransaction":  # type: ignore[override]
+        return RlsSessionTransaction(super().begin(nested=nested), self)
 
     def execute(self, *args, **kwargs):
         """
