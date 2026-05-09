@@ -242,11 +242,7 @@ class BypassRLSContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.session._rls_bypass_depth -= 1
-        is_outermost = self.session._rls_bypass_depth == 0
-        if exc_type is not None and is_outermost:
-            self.session.rollback()
-            self.session._rls_bypass_depth = 0
-        if is_outermost:
+        if self.session._rls_bypass_depth == 0:
             self.session._rls_dirty = True
 
 
@@ -263,11 +259,7 @@ class AsyncBypassRLSContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self.session._rls_bypass_depth -= 1
-        is_outermost = self.session._rls_bypass_depth == 0
-        if exc_type is not None and is_outermost:
-            await self.session.rollback()
-            self.session._rls_bypass_depth = 0
-        if is_outermost:
+        if self.session._rls_bypass_depth == 0:
             self.session._rls_dirty = True
 
 
