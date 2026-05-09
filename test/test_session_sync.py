@@ -14,6 +14,7 @@ from test import models
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
+_ERROR_QUERY = sqlalchemy.text("SELECT 1/0;")
 
 
 def rls_setting(session: session.RlsSession, setting_name: str) -> str | None:
@@ -153,7 +154,7 @@ class SyncRLSTests(unittest.TestCase):
         with self.assertRaises(sqlalchemy.exc.DataError):
             with rls_sess.begin():
                 with rls_sess.bypass_rls():
-                    rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                    rls_sess.execute(_ERROR_QUERY)
         rls_sess.close()
 
     def test_exception_without_bypass_propagates(self):
@@ -161,7 +162,7 @@ class SyncRLSTests(unittest.TestCase):
         rls_sess = self._new_session()
         with self.assertRaises(sqlalchemy.exc.DataError):
             with rls_sess.begin():
-                rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                rls_sess.execute(_ERROR_QUERY)
         rls_sess.close()
 
     def test_sql_exception_during_bypass_restores_state(self):
@@ -170,7 +171,7 @@ class SyncRLSTests(unittest.TestCase):
         with self.assertRaises(sqlalchemy.exc.DataError):
             with rls_sess.begin():
                 with rls_sess.bypass_rls():
-                    rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                    rls_sess.execute(_ERROR_QUERY)
         # _rls_bypass flag must be cleared regardless of exception
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
@@ -218,7 +219,7 @@ class SyncRLSTests(unittest.TestCase):
                 # so the outer transaction remains usable.
                 with self.assertRaises(sqlalchemy.exc.DataError):
                     with rls_sess.begin_nested():
-                        rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                        rls_sess.execute(_ERROR_QUERY)
                 # Still inside bypass_rls: bypass must still be active and all
                 # rows should be visible.
                 self.assertTrue(rls_bypassed(rls_sess))
@@ -239,7 +240,7 @@ class SyncRLSTests(unittest.TestCase):
             with rls_sess.begin():
                 with rls_sess.bypass_rls():
                     # Error propagates out of both the bypass and begin contexts.
-                    rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                    rls_sess.execute(_ERROR_QUERY)
         # Bypass depth must be reset regardless of the exception path.
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # In the next transaction RLS must filter rows to only account_id=1.
