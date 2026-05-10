@@ -172,6 +172,21 @@ class RlsAsyncSessionTransaction:
     ``AsyncSession.begin()`` with private state.  We need to wrap the
     already-constructed instance rather than create a new subclass instance,
     so delegation is the only viable approach.
+
+    Differences from :class:`RlsSessionTransaction` that are required by the
+    underlying ``AsyncSessionTransaction`` API:
+
+    * ``close()`` is absent — ``AsyncSessionTransaction`` has no ``close()``
+      method (unlike the sync ``SessionTransaction``).
+    * ``parent`` is absent — ``AsyncSessionTransaction`` has no ``parent``
+      property (unlike the sync ``SessionTransaction``).
+    * ``start()`` / ``__await__`` are present — ``AsyncSessionTransaction``
+      uses an explicit async-start pattern rather than ``__enter__``, allowing
+      the object to be both awaited directly and used as an async context
+      manager (see ``start`` and ``__await__`` below).
+    * ``sync_transaction`` is present — async-only property that exposes the
+      underlying sync ``SessionTransaction`` (no equivalent exists in the sync
+      wrapper).
     """
 
     def __init__(
@@ -183,6 +198,13 @@ class RlsAsyncSessionTransaction:
         self._session = session
 
     async def start(self, is_ctxmanager: bool = False) -> "RlsAsyncSessionTransaction":
+        # Unlike the sync SessionTransaction which begins implicitly via
+        # __enter__, AsyncSessionTransaction exposes an explicit start() method.
+        # The is_ctxmanager flag tells SQLAlchemy whether the transaction was
+        # entered through an async context manager (True) or awaited directly
+        # (False), allowing both usage patterns:
+        #   async with session.begin() as tx: ...   # context-manager usage
+        #   tx = await session.begin()              # direct-await usage
         await self._transaction.start(is_ctxmanager=is_ctxmanager)
         self._session._rls_dirty = True
         return self
@@ -190,6 +212,9 @@ class RlsAsyncSessionTransaction:
     def __await__(
         self,
     ) -> abc.Generator[object, object, "RlsAsyncSessionTransaction"]:
+        # AsyncSessionTransaction (unlike the sync SessionTransaction) supports
+        # being awaited directly in addition to being used as an async context
+        # manager.  This makes ``tx = await session.begin()`` possible.
         return self.start().__await__()
 
     async def __aenter__(self) -> "RlsAsyncSessionTransaction":
@@ -210,6 +235,9 @@ class RlsAsyncSessionTransaction:
         self._session._rls_dirty = True
 
     async def prepare(self) -> None:
+        # AsyncSessionTransaction has no prepare() method (unlike the sync
+        # SessionTransaction).  AsyncRlsSession.prepare() is called instead,
+        # which uses run_sync() to invoke the underlying sync Session.prepare().
         await self._session.prepare()
 
     @property
@@ -226,6 +254,10 @@ class RlsAsyncSessionTransaction:
 
     @property
     def sync_transaction(self) -> orm.SessionTransaction | None:
+        # Async-only property: exposes the underlying sync SessionTransaction
+        # that AsyncSessionTransaction wraps.  There is no equivalent in the
+        # sync RlsSessionTransaction because SessionTransaction is itself the
+        # "sync transaction" and wraps no further layer.
         return self._transaction.sync_transaction
 
 
@@ -318,6 +350,9 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
             self._rls_dirty = False
 
     def begin(self) -> RlsAsyncSessionTransaction:  # type: ignore[override]
+        # AsyncSession.begin() does not accept a nested parameter (unlike
+        # sync Session.begin(nested=False)).  To create nested transactions
+        # (savepoints) in async code, use begin_nested() instead.
         return RlsAsyncSessionTransaction(super().begin(), self)
 
     async def execute(self, *args, **kwargs):
@@ -350,6 +385,10 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         self._rls_dirty = True
 
     async def prepare(self) -> None:
+        # AsyncSession has no prepare() method (unlike sync Session, which
+        # exposes Session.prepare() directly).  This override is required so
+        # that RlsAsyncSessionTransaction.prepare() has a target to call; it
+        # uses run_sync() to invoke the underlying sync Session.prepare().
         await self.run_sync(lambda sess: sess.prepare())
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
