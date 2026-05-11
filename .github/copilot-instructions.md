@@ -2,7 +2,10 @@
 
 ## Linting
 
-Lint and format all Python code with [ruff](https://docs.astral.sh/ruff/).
+Lint and format all Python code with ruff.
+
+## Type Hints
+Use type hints, and check them with mypy.
 
 ## Import Style
 
