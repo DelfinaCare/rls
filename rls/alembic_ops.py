@@ -290,7 +290,9 @@ def compare_table_level(
 class CreatePolicyOp(alembic_operations.MigrateOperation):
     """Operation to create a new RLS policy."""
 
-    def __init__(self, table_name, policy_name, definition, cmd, expr, allow_bypass_rls=True):
+    def __init__(
+        self, table_name, policy_name, definition, cmd, expr, allow_bypass_rls=True
+    ):
         self.table_name = table_name
         self.definition = definition
         self.cmd = cmd
