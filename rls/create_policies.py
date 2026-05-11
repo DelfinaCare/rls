@@ -3,7 +3,10 @@ from sqlalchemy import engine
 from sqlalchemy import orm
 
 
-def create_policies(Base: type[orm.DeclarativeMeta], connection: engine.Connection):
+def create_policies(
+    Base: type[orm.DeclarativeMeta] | type[orm.DeclarativeBase],
+    connection: engine.Connection,
+):
     """Create policies for `Base.metadata.create_all()`."""
     for table, settings in Base.metadata.info["rls_policies"].items():
         if not settings:

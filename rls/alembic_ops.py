@@ -3,7 +3,6 @@ import typing
 import sqlalchemy as sa
 from alembic import autogenerate
 from alembic import operations as alembic_operations
-from sqlalchemy import orm
 from sqlalchemy.dialects import postgresql as pg_dialect
 
 from . import _sql_gen
@@ -391,17 +390,3 @@ def render_drop_policy(autogen_context, op):
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
         f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
     )
-
-
-def set_metadata_info(Base: type[orm.DeclarativeMeta]):
-    """RLS policies are first added to the Metadata before applied."""
-    Base.metadata.info.setdefault("rls_policies", dict())
-    for mapper in Base.registry.mappers:
-        if not hasattr(mapper.class_, "__rls_policies__"):
-            continue
-
-        Base.metadata.info["rls_policies"][mapper.tables[0].fullname] = (
-            mapper.class_.__rls_policies__
-        )
-
-    return Base

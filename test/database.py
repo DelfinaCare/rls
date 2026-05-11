@@ -1,15 +1,8 @@
 import sqlalchemy as sa
 import testing.postgresql
 
-from rls import alembic_ops
 from rls import create_policies
 from test import models
-
-# register_alembic() is called when models.py first creates Base, before User
-# and Item are defined, so the mapper registry is empty at that point.
-# Re-run set_metadata_info() here, after all models have been imported, so
-# that create_policies() can find the __rls_policies__ metadata.
-alembic_ops.set_metadata_info(models.Base)
 
 
 class TestPostgres:

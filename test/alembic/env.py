@@ -4,7 +4,7 @@ import sqlalchemy
 from alembic import context
 from sqlalchemy import pool
 
-from rls import alembic_ops
+from rls import register
 from test import models
 
 # this is the Alembic Config object, which provides
@@ -22,8 +22,7 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 
 
-# TODO: change meta_data_info name to rls_base_wrapper(base: declarative_base)
-target_metadata = alembic_ops.set_metadata_info(models.Base).metadata
+target_metadata = register.base_wrapper(models.Base).metadata
 
 
 # other values from the config, defined by the needs of env.py,

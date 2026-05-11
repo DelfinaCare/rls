@@ -3,7 +3,6 @@ import unittest
 from unittest import mock
 
 import sqlalchemy
-from sqlalchemy import orm
 from sqlalchemy import sql
 
 from rls import alembic_ops
@@ -23,7 +22,7 @@ def _mock_autogen_context():
     return ctx
 
 
-def _make_boolean_policy(**kwargs):
+def _make_boolean_policy(**kwargs) -> schemas.Permissive:
     """Create a Permissive policy with a boolean custom_expr for testing."""
     defaults: dict[str, typing.Any] = {
         "condition_args": [
@@ -320,32 +319,6 @@ class TestCmdValue(unittest.TestCase):
 
     def test_with_string(self):
         self.assertEqual(alembic_ops._cmd_value("ALL"), "ALL")
-
-
-class TestSetMetadataInfo(unittest.TestCase):
-    def test_populates_rls_policies(self):
-        from test import models
-
-        Base = models.Base
-        # set_metadata_info is already called by register_rls, but we call it
-        # explicitly to verify the behavior.
-        result = alembic_ops.set_metadata_info(Base)
-        self.assertIs(result, Base)
-        self.assertIn("rls_policies", Base.metadata.info)
-        self.assertIn("users", Base.metadata.info["rls_policies"])
-        self.assertIn("items", Base.metadata.info["rls_policies"])
-
-    def test_skips_models_without_rls_policies(self):
-        """Models without __rls_policies__ should not appear in the dict."""
-        Base: typing.Any = orm.declarative_base()
-
-        class NoRls(Base):
-            __tablename__ = "no_rls"
-            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-
-        self.assertIn(NoRls.__tablename__, Base.metadata.tables)
-        alembic_ops.set_metadata_info(Base)
-        self.assertEqual(Base.metadata.info["rls_policies"], {})
 
 
 class TestCompareTableLevel(unittest.TestCase):
