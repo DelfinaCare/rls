@@ -266,6 +266,25 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         await rls_sess1.close()
         await rls_sess2.close()
 
+    async def test_rollback_bypass_interaction(self):
+        rls_sess = self._new_session(account_id=1)
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(result, [1])
+        await rls_sess.rollback()
+        result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+        self.assertEqual(result, [1])
+        async with rls_sess.bypass_rls():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1, 2])
+            await rls_sess.rollback()
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1, 2])
+            await rls_sess.rollback()
+            async with rls_sess.bypass_rls():
+                result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(result, [1, 2])
+        await rls_sess.close()
+
     async def test_multiple_sessions_bypass_isolated(self):
         """Bypassing RLS on one async session does not affect a concurrent session."""
         rls_sess1 = self._new_session(account_id=1)

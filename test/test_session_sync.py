@@ -365,6 +365,25 @@ class SyncRLSTests(unittest.TestCase):
         rls_sess1.close()
         rls_sess2.close()
 
+    def test_rollback_bypass_interaction(self):
+        rls_sess = self._new_session(account_id=1)
+        result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+        self.assertEqual(result, [1])
+        rls_sess.rollback()
+        result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+        self.assertEqual(result, [1])
+        with rls_sess.bypass_rls():
+            result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result, [1, 2])
+            rls_sess.rollback()
+            result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result, [1, 2])
+            rls_sess.rollback()
+            with rls_sess.bypass_rls():
+                result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(result, [1, 2])
+        rls_sess.close()
+
     def test_rls_context_variable_persists_after_commit(self):
         """RLS context variables (e.g. account_id) still filter correctly after commit."""
         rls_sess = self._new_session(account_id=1)
