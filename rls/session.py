@@ -104,13 +104,13 @@ class RlsSessionTransaction:
     """Wraps :class:`~sqlalchemy.orm.SessionTransaction` so that every
     commit / rollback marks the owning :class:`RlsSession` as *dirty*,
     ensuring RLS configuration is re-applied on the next statement.
-
-    Composition is used instead of inheritance because ``SessionTransaction``
-    is instantiated internally by ``Session.begin()`` with private state
-    (``SessionTransactionOrigin``, parent chain, snapshot).  We need to wrap
-    the already-constructed instance rather than create a new subclass
-    instance, so delegation is the only viable approach.
     """
+
+    # Composition is used instead of inheritance because ``SessionTransaction``
+    # is instantiated internally by ``Session.begin()`` with private state
+    # (``SessionTransactionOrigin``, parent chain, snapshot).  We need to wrap
+    # the already-constructed instance rather than create a new subclass
+    # instance, so delegation is the only viable approach.
 
     def __init__(
         self,
@@ -166,28 +166,28 @@ class RlsAsyncSessionTransaction:
     """Wraps :class:`~sqlalchemy.ext.asyncio.AsyncSessionTransaction` so that
     every commit / rollback marks the owning :class:`AsyncRlsSession` as
     *dirty*, ensuring RLS configuration is re-applied on the next statement.
-
-    Composition is used instead of inheritance because
-    ``AsyncSessionTransaction`` is instantiated internally by
-    ``AsyncSession.begin()`` with private state.  We need to wrap the
-    already-constructed instance rather than create a new subclass instance,
-    so delegation is the only viable approach.
-
-    Differences from :class:`RlsSessionTransaction` that are required by the
-    underlying ``AsyncSessionTransaction`` API:
-
-    * ``close()`` is absent — ``AsyncSessionTransaction`` has no ``close()``
-      method (unlike the sync ``SessionTransaction``).
-    * ``parent`` is absent — ``AsyncSessionTransaction`` has no ``parent``
-      property (unlike the sync ``SessionTransaction``).
-    * ``start()`` / ``__await__`` are present — ``AsyncSessionTransaction``
-      uses an explicit async-start pattern rather than ``__enter__``, allowing
-      the object to be both awaited directly and used as an async context
-      manager (see ``start`` and ``__await__`` below).
-    * ``sync_transaction`` is present — async-only property that exposes the
-      underlying sync ``SessionTransaction`` (no equivalent exists in the sync
-      wrapper).
     """
+
+    # Composition is used instead of inheritance because
+    # ``AsyncSessionTransaction`` is instantiated internally by
+    # ``AsyncSession.begin()`` with private state.  We need to wrap the
+    # already-constructed instance rather than create a new subclass instance,
+    # so delegation is the only viable approach.
+
+    # Differences from :class:`RlsSessionTransaction` that are required by the
+    # underlying ``AsyncSessionTransaction`` API:
+
+    # * ``close()`` is absent — ``AsyncSessionTransaction`` has no ``close()``
+    #   method (unlike the sync ``SessionTransaction``).
+    # * ``parent`` is absent — ``AsyncSessionTransaction`` has no ``parent``
+    #   property (unlike the sync ``SessionTransaction``).
+    # * ``start()`` / ``__await__`` are present — ``AsyncSessionTransaction``
+    #   uses an explicit async-start pattern rather than ``__enter__``, allowing
+    #   the object to be both awaited directly and used as an async context
+    #   manager (see ``start`` and ``__await__`` below).
+    # * ``sync_transaction`` is present — async-only property that exposes the
+    #   underlying sync ``SessionTransaction`` (no equivalent exists in the sync
+    #   wrapper).
 
     def __init__(
         self,
@@ -297,9 +297,7 @@ class AsyncBypassRLSContext:
 
 class RlsSession(_RlsSessionMixin, orm.Session):
     def _execute_set_statements(self):
-        """
-        Executes the RLS SET statements unless bypassing RLS.
-        """
+        """Executes the RLS SET statement if present."""
         if (stmt := self._get_set_statement()) is not None:
             super().execute(stmt)
             self._rls_dirty = False
@@ -308,23 +306,14 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         return RlsSessionTransaction(super().begin(nested=nested), self)
 
     def execute(self, *args, **kwargs):
-        """
-        Executes SQL queries, applying RLS unless bypassing.
-        """
         self._execute_set_statements()
         return super().execute(*args, **kwargs)
 
     def scalar(self, *args, **kwargs):
-        """
-        Executes a statement and returns a scalar result, applying RLS unless bypassing.
-        """
         self._execute_set_statements()
         return super().scalar(*args, **kwargs)
 
     def scalars(self, *args, **kwargs):
-        """
-        Executes a statement and returns scalar results, applying RLS unless bypassing.
-        """
         self._execute_set_statements()
         return super().scalars(*args, **kwargs)
 
@@ -342,9 +331,7 @@ class RlsSession(_RlsSessionMixin, orm.Session):
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):
-        """
-        Executes the RLS SET statements unless bypassing RLS.
-        """
+        """Executes the RLS SET statement if present."""
         if (stmt := self._get_set_statement()) is not None:
             await super().execute(stmt)
             self._rls_dirty = False
@@ -356,23 +343,14 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         return RlsAsyncSessionTransaction(super().begin(), self)
 
     async def execute(self, *args, **kwargs):
-        """
-        Executes SQL queries, applying RLS unless bypassing.
-        """
         await self._execute_set_statements()
         return await super().execute(*args, **kwargs)
 
     async def scalar(self, *args, **kwargs):
-        """
-        Executes a statement and returns a scalar result, applying RLS unless bypassing.
-        """
         await self._execute_set_statements()
         return await super().scalar(*args, **kwargs)
 
     async def scalars(self, *args, **kwargs):
-        """
-        Executes a statement and returns scalar results, applying RLS unless bypassing.
-        """
         await self._execute_set_statements()
         return await super().scalars(*args, **kwargs)
 
