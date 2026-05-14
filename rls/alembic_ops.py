@@ -127,13 +127,13 @@ def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
     policies = []
     for row in result:
         policy_data = dict(zip(columns, row))
-        policy = policy.Policy(
+        p = policy.Policy(
             name=policy_data["policyname"],
             cmd=policy.Command(policy_data["cmd"]),
             expr=policy_data.get("with_check") or policy_data.get("qual") or "",
             policy_type=policy.PolicyType(policy_data["permissive"]),
         )
-        policies.append(policy)
+        policies.append(p)
 
     return policies
 
