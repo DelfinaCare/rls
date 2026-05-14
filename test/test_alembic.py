@@ -67,7 +67,7 @@ class TestAlembicOperations(unittest.TestCase):
                 .fetchall()
             )
 
-            self.assertTrue(len(policies) == 6, "Expected 6 policies to be created")
+            self.assertTrue(len(policies) == 4, "Expected 4 policies to be created")
 
             for policy in expectations.EXPECTED_POLICIES:
                 matched_policy = next(

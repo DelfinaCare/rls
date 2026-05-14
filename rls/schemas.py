@@ -81,18 +81,13 @@ def policy_changed_checker(db_policy: "Policy", metadata_policy: "Policy") -> bo
 
     Returns True if the policies are equivalent, False otherwise.
     """
-    temp_metadata_policy = metadata_policy.model_copy()
-    if metadata_policy.allow_bypass_rls:
-        temp_metadata_policy.expression = _sql_gen.add_bypass_rls_to_expr(
-            metadata_policy.expression
-        )
-    else:
-        temp_metadata_policy.expression = metadata_policy.expression
-
-    if isinstance(temp_metadata_policy.cmd, list):
-        temp_metadata_policy.cmd = Command(temp_metadata_policy.cmd[0])
-
-    return bool(db_policy == temp_metadata_policy)
+    if db_policy.policy_type != metadata_policy.policy_type:
+        return False
+    if db_policy.cmd != metadata_policy.cmd:
+        return False
+    return _sql_gen.compare_between_policy_sql_expressions(
+        db_policy.expr, metadata_policy.expr
+    )
 
 
 class Policy(pydantic.BaseModel):
@@ -121,7 +116,7 @@ class Policy(pydantic.BaseModel):
                 [cmd.value for cmd in cmd] if isinstance(cmd, list) else [cmd.value]
             )
             name_parts.append(hashlib.sha256(expr.encode()).hexdigest()[:8])
-            name = "_".join(name_parts)
+        name = "_".join(name_parts).lower()
         return cls(expr=expr, cmd=cmd, name=name, policy_type=policy_type)
 
     def render_policy(self, table_name: str) -> sqlalchemy.TextClause:

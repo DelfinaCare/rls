@@ -156,13 +156,13 @@ class TestCreatePolicyOp(unittest.TestCase):
         op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
         self.assertEqual(op.table_name, "users")
         self.assertEqual(op.policy_name, "pol1")
-        self.assertEqual(op.definition, "PERMISSIVE")
+        self.assertEqual(op.policy_type, "PERMISSIVE")
         self.assertEqual(op.cmd, "SELECT")
         self.assertEqual(op.expr, "id = 1")
 
@@ -171,7 +171,7 @@ class TestCreatePolicyOp(unittest.TestCase):
         alembic_ops.CreatePolicyOp.create_policy(
             ops,
             table_name="users",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
             policy_name="pol1",
@@ -186,7 +186,7 @@ class TestCreatePolicyOp(unittest.TestCase):
         op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -194,7 +194,7 @@ class TestCreatePolicyOp(unittest.TestCase):
         self.assertIsInstance(rev, alembic_ops.DropPolicyOp)
         self.assertEqual(rev.table_name, "users")
         self.assertEqual(rev.policy_name, "pol1")
-        self.assertEqual(rev.definition, "PERMISSIVE")
+        self.assertEqual(rev.policy_type, "PERMISSIVE")
         self.assertEqual(rev.cmd, "SELECT")
         self.assertEqual(rev.expr, "id = 1")
 
@@ -204,7 +204,7 @@ class TestDropPolicyOp(unittest.TestCase):
         op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -217,7 +217,7 @@ class TestDropPolicyOp(unittest.TestCase):
             ops,
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -230,7 +230,7 @@ class TestDropPolicyOp(unittest.TestCase):
         op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -238,7 +238,7 @@ class TestDropPolicyOp(unittest.TestCase):
         self.assertIsInstance(rev, alembic_ops.CreatePolicyOp)
         self.assertEqual(rev.table_name, "users")
         self.assertEqual(rev.policy_name, "pol1")
-        self.assertEqual(rev.definition, "PERMISSIVE")
+        self.assertEqual(rev.policy_type, "PERMISSIVE")
         self.assertEqual(rev.cmd, "SELECT")
         self.assertEqual(rev.expr, "id = 1")
 
@@ -249,7 +249,7 @@ class TestCreatePolicyImpl(unittest.TestCase):
         operation = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -267,7 +267,7 @@ class TestDropPolicyImpl(unittest.TestCase):
         operation = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -281,7 +281,7 @@ class TestRenderCreatePolicy(unittest.TestCase):
         op = alembic_ops.CreatePolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -300,7 +300,7 @@ class TestRenderDropPolicy(unittest.TestCase):
         op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
-            definition="PERMISSIVE",
+            policy_type="PERMISSIVE",
             cmd="SELECT",
             expr="id = 1",
         )
@@ -374,7 +374,6 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_enable_rls_when_meta_has_but_db_does_not(self):
         policy = _sample_policy()
-        policy.get_sql_policies(table_name="users")
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=False,
@@ -398,14 +397,13 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_no_rls_change_when_both_enabled(self):
         policy = _sample_policy()
-        policy.get_sql_policies(table_name="users")
         # Simulate a matching DB policy
         db_policy = schemas.Policy(
-            definition="PERMISSIVE",
-            cmd=schemas.Command.select,
-            custom_policy_name=policy.policy_names[0],
+            name=policy.name,
+            cmd=policy.cmd,
+            expr=policy.expr,
+            policy_type=policy.policy_type,
         )
-        db_policy.expression = policy.expression
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
@@ -423,7 +421,6 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_creates_policy_when_missing_from_db(self):
         policy = _sample_policy()
-        policy.get_sql_policies(table_name="users")
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
@@ -438,11 +435,11 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_drops_policy_when_missing_from_metadata(self):
         db_policy = schemas.Policy(
-            definition="PERMISSIVE",
+            name="orphan_policy",
             cmd=schemas.Command.select,
-            custom_policy_name="orphan_policy",
+            expr="true",
+            policy_type=schemas.PolicyType.permissive,
         )
-        db_policy.expression = "true"
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
@@ -458,15 +455,14 @@ class TestCompareTableLevel(unittest.TestCase):
     def test_recreates_policy_when_changed(self):
         """A changed policy should be dropped then re-created."""
         policy = _sample_policy()
-        policy.get_sql_policies(table_name="users")
 
         # DB policy has same name but different expression
         db_policy = schemas.Policy(
-            definition="PERMISSIVE",
-            cmd=schemas.Command.select,
-            custom_policy_name=policy.policy_names[0],
+            name=policy.name,
+            cmd=policy.cmd,
+            expr="totally_different_expression",
+            policy_type=policy.policy_type,
         )
-        db_policy.expression = "totally_different_expression"
 
         modify_ops = self._build_context(
             table_exists=True,
@@ -483,18 +479,23 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertGreaterEqual(len(drop_ops), 1)
         self.assertGreaterEqual(len(create_ops), 1)
 
-    def test_list_cmd_generates_multiple_policies(self):
-        """A policy with cmd=[SELECT, UPDATE] should produce two create ops."""
-        policy = _sample_policy(
-            cmd=[schemas.Command.select, schemas.Command.update],
+    def test_multiple_policies_generate_multiple_create_ops(self):
+        """Multiple metadata policies should each produce a separate create op."""
+        policy_select = _sample_policy()
+        policy_update = schemas.Policy.from_sqla(
+            condition_args=[
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=schemas.Command.update,
+            expr=lambda x: sql.column("id") == x,
         )
-        policy.get_sql_policies(table_name="users")
-
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
             db_policies=[],
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [policy_select, policy_update]},
         )
         create_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
@@ -502,9 +503,8 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(create_ops), 2)
 
     def test_single_cmd_creates_policy(self):
-        """A policy with a single (non-list) cmd should still create one op."""
-        policy = _sample_policy(cmd=schemas.Command.select)
-        policy.get_sql_policies(table_name="users")
+        """A policy with a single cmd should create one op."""
+        policy = _sample_policy()
 
         modify_ops = self._build_context(
             table_exists=True,
@@ -521,7 +521,6 @@ class TestCompareTableLevel(unittest.TestCase):
     def test_table_not_exists_treats_rls_as_disabled(self):
         """If the table doesn't exist yet, rls_enabled_db should be False."""
         policy = _sample_policy()
-        policy.get_sql_policies(table_name="users")
 
         modify_ops = self._build_context(
             table_exists=False,
