@@ -1,3 +1,4 @@
+import hashlib
 import inspect
 import typing
 from enum import Enum
@@ -21,28 +22,37 @@ class Command(str, Enum):
     delete = "DELETE"
 
 
+class PolicyType(str, Enum):
+    permissive = "PERMISSIVE"
+    restrictive = "RESTRICTIVE"
+
+
 class ConditionArg(pydantic.BaseModel):
     comparator_name: str
     type: type[sql.sqltypes.TypeEngine]
 
 
-def compile_custom_expr(
-    table_name: str,
+def _wrap_rls_value_setting(
+    value_name: str, value_type: type[sql.sqltypes.TypeEngine]
+) -> elements.ColumnElement:
+    return sql.func.nullif(
+        sql.func.current_setting(f"{_CONDITION_ARGS_PREFIX}.{value_name}", True),
+        "",
+    ).cast(value_type)
+
+
+def compile_sqla_expr(
+    expr: typing.Callable[..., elements.ColumnElement],
     condition_args: list[ConditionArg] | None,
-    custom_expr: typing.Callable[..., elements.ColumnElement] | None,
+    allow_bypass_rls: bool = True,
 ) -> str:
     """Validate and compile a custom expression into a SQL string.
 
     Returns the compiled SQL expression string.
     """
-    if custom_expr is None:
-        raise ValueError(
-            f"`custom_expr` must be defined for table `{table_name}`. "
-            "If you're constructing expressions dynamically, provide a callable."
-        )
 
     condition_args_length = len(condition_args) if condition_args is not None else 0
-    lambda_args_length = len(inspect.signature(custom_expr).parameters)
+    lambda_args_length = len(inspect.signature(expr).parameters)
     if condition_args_length != lambda_args_length:
         raise ValueError(
             f"Length mismatch for arguments. Expected {condition_args_length}, got {lambda_args_length}"
@@ -50,18 +60,18 @@ def compile_custom_expr(
 
     args = []
     for arg in condition_args or []:
-        wrapped_value = sql.func.nullif(
-            sql.func.current_setting(
-                f"{_CONDITION_ARGS_PREFIX}.{arg.comparator_name}", True
-            ),
-            "",
-        ).cast(arg.type)
-        args.append(wrapped_value)
+        args.append(_wrap_rls_value_setting(arg.comparator_name, arg.type))
 
-    clause_element = custom_expr(*args)
+    clause_element = expr(*args)
 
     if not isinstance(clause_element.type, sqlalchemy.Boolean):
         raise ValueError("Expression does not evaluate to a Boolean value")
+
+    if allow_bypass_rls:
+        clause_element = sql.or_(
+            clause_element,
+            _wrap_rls_value_setting("bypass_rls", sqlalchemy.Boolean) == True,
+        )
 
     return str(clause_element.compile(compile_kwargs={"literal_binds": True}))
 
@@ -86,107 +96,78 @@ def policy_changed_checker(db_policy: "Policy", metadata_policy: "Policy") -> bo
 
 
 class Policy(pydantic.BaseModel):
-    """A single row-level security policy attached to a database table.
+    """A single row-level security policy attached to a database table."""
 
-    Parameters
-    ----------
-    allow_bypass_rls:
-        When ``True`` (the default) the generated policy expression is
-        augmented with an ``OR`` branch that allows any query to pass when
-        the session variable ``rls.bypass_rls`` is set to ``true``.  This
-        lets callers temporarily suspend RLS for a small, audited block of
-        code (e.g. administrative queries) while relying on RLS for the rest
-        of the session.
+    cmd: Command = Command.all
+    expr: str
+    name: str
+    policy_type: PolicyType = PolicyType.permissive
 
-        Set this to ``False`` to generate a strict policy where the bypass
-        mechanism is never honoured, even for privileged callers.
-    """
-
-    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
-
-    definition: str
-    condition_args: list[ConditionArg] | None = None
-    cmd: Command | list[Command]
-    custom_expr: typing.Callable[..., elements.ColumnElement] | None = None
-    custom_policy_name: str | None = None
-    allow_bypass_rls: bool = True
-
-    _policy_names: list[str] = pydantic.PrivateAttr(default_factory=list)
-    _expr: str = pydantic.PrivateAttr(default="")
-
-    @property
-    def policy_names(self) -> list[str]:
-        """Getter for the private _policy_names field."""
-        return self._policy_names
-
-    @property
-    def expression(self) -> str:
-        """Getter for the private _expr field."""
-        return self._expr
-
-    @expression.setter
-    def expression(self, expr: str) -> None:
-        self._expr = expr
-
-    def get_sql_policies(self, table_name: str, name_suffix: str = "0"):
-        commands = [self.cmd] if isinstance(self.cmd, str) else self.cmd
-
-        self._expr = compile_custom_expr(
-            table_name=table_name,
-            condition_args=self.condition_args,
-            custom_expr=self.custom_expr,
-        )
-
-        # Reset policy names for this call so re-invocations don't accumulate duplicates.
-        self._policy_names = []
-        policy_lists = []
-
-        for cmd in commands:
-            cmd_value = cmd.value
-
-            if self.custom_policy_name is not None:
-                policy_name = (
-                    f"{table_name}_{self.custom_policy_name}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
-                )
-            else:
-                policy_name = (
-                    f"{table_name}_{self.definition}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
-                )
-
-            self._policy_names.append(policy_name)
-
-            generated_policy = _sql_gen.generate_rls_policy(
-                cmd=cmd_value,
-                definition=self.definition,
-                policy_name=policy_name,
-                table_name=table_name,
-                expr=self._expr,
-                allow_bypass_rls=self.allow_bypass_rls,
+    @classmethod
+    def from_sqla(
+        cls,
+        expr: typing.Callable[..., elements.ColumnElement],
+        condition_args: list[ConditionArg],
+        cmd: list[Command],
+        name: str | None = None,
+        allow_bypass_rls: bool = True,
+        policy_type: PolicyType = PolicyType.permissive,
+    ) -> "Policy":
+        expr = compile_sqla_expr(expr, condition_args, allow_bypass_rls)
+        if name is None:
+            name_parts: list[str] = [policy_type.value]
+            name_parts.extend(arg.comparator_name for arg in condition_args)
+            name_parts.extend(
+                [cmd.value for cmd in cmd] if isinstance(cmd, list) else [cmd.value]
             )
-            policy_lists.append(generated_policy)
-        return policy_lists
+            name_parts.append(hashlib.sha256(expr.encode()).hexdigest()[:8])
+            name = "_".join(name_parts)
+        return cls(expr=expr, cmd=cmd, name=name, policy_type=policy_type)
 
-    def __eq__(self, other):
-        if not isinstance(other, Policy):
-            return NotImplemented
+    def render_policy(self, table_name: str) -> sqlalchemy.TextClause:
+        """Generate a SQL CREATE POLICY statement."""
 
-        definition_check = self.definition == other.definition
-        cmd_check = self.cmd == other.cmd
-        expression_check = _sql_gen.compare_between_policy_sql_expressions(
-            self.expression, other.expression
-        )
+        # See docs here: https://www.postgresql.org/docs/current/sql-createpolicy.html
+        if self.cmd in ["ALL", "SELECT", "DELETE"]:
+            return sqlalchemy.text(f"""
+                    CREATE POLICY {self.name} ON {table_name}
+                    AS {self.policy_type.value}
+                    FOR {self.cmd.value}
+                    USING ({self.expr})
+                    """)
 
-        return definition_check and cmd_check and expression_check
+        elif self.cmd == "UPDATE":
+            # UPDATE requires both USING and WITH CHECK
+            return sqlalchemy.text(f"""
+                CREATE POLICY {self.name} ON {table_name}
+                AS {self.policy_type.value}
+                FOR {self.cmd.value}
+                USING ({self.expr})
+                WITH CHECK ({self.expr});
+            """)
 
-    def __str__(self):
-        return f"Policy(definition={self.definition}, cmd={self.cmd}, expression={self.expression})"
+        elif self.cmd == "INSERT":
+            return sqlalchemy.text(f"""
+                    CREATE POLICY {self.name} ON {table_name}
+                    AS {self.policy_type.value}
+                    FOR {self.cmd.value}
+                    WITH CHECK ({self.expr})
+                    """)
 
+        else:
+            raise ValueError(f'Unknown policy command "{cmd}"')
 
-class Permissive(Policy):
-    definition: typing.Literal["PERMISSIVE"] = "PERMISSIVE"
+    # def __eq__(self, other):
+    #     if not isinstance(other, Policy):
+    #         return NotImplemented
 
+    #     definition_check = self.definition == other.definition
+    #     cmd_check = self.cmd == other.cmd
+    #     expression_check = _sql_gen.compare_between_policy_sql_expressions(
+    #         self.expression, other.expression
+    #     )
 
-class Restrictive(Policy):
-    definition: typing.Literal["RESTRICTIVE"] = "RESTRICTIVE"
+    #     return definition_check and cmd_check and expression_check
+
+    # def __str__(self):
+    #     return f"Policy(definition={self.definition}, cmd={self.cmd.value}, expression={self.expression})"

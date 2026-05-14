@@ -207,25 +207,44 @@ def compare_table_level(
     # STEP 5. Compare and manage individual policies (add, remove, update)
     all_metadata_policy_names = []
     for idx, policy_meta in enumerate(rls_policies_meta):
-        policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
-        all_metadata_policy_names.extend(policy_meta.policy_names)
-        policy_expr = policy_meta.expression
-        for ix, single_policy_name in enumerate(policy_meta.policy_names):
-            if isinstance(policy_meta.cmd, list):
-                current_cmd = _cmd_value(policy_meta.cmd[ix])
-            else:
-                current_cmd = _cmd_value(policy_meta.cmd)
+        single_policy_name = policy_meta.name
+        current_cmd = policy_meta.cmd
 
-            matched_policy = next(
-                (
-                    p
-                    for p in rls_policies_db
-                    if p.custom_policy_name == single_policy_name
-                ),
-                None,
+        matched_policy = next(
+            (p for p in rls_policies_db if p.name == single_policy_name),
+            None,
+        )
+        if not matched_policy:
+            # Policy exists in metadata but not in the database, so create it
+            modify_ops.ops.append(
+                CreatePolicyOp(
+                    table_name=tablename,
+                    definition=policy_meta.definition,
+                    policy_name=single_policy_name,
+                    cmd=current_cmd,
+                    expr=policy_expr,
+                    allow_bypass_rls=policy_meta.allow_bypass_rls,
+                )
             )
-            if not matched_policy:
-                # Policy exists in metadata but not in the database, so create it
+
+        else:
+            # Policy exists in both metadata and database, so check if it needs to be updated
+            # Notice: Matched policy is db policy
+            tmp_policy_meta = policy_meta.model_copy()
+            tmp_policy_meta.cmd = schemas.Command(current_cmd)
+            if not schemas.policy_changed_checker(
+                db_policy=matched_policy, metadata_policy=tmp_policy_meta
+            ):
+                # Policy has changed, so drop and recreate it
+                modify_ops.ops.append(
+                    DropPolicyOp(
+                        table_name=tablename,
+                        definition=matched_policy.definition,
+                        policy_name=matched_policy.custom_policy_name,
+                        cmd=current_cmd,
+                        expr=matched_policy.expression,
+                    )
+                )
                 modify_ops.ops.append(
                     CreatePolicyOp(
                         table_name=tablename,
@@ -236,35 +255,6 @@ def compare_table_level(
                         allow_bypass_rls=policy_meta.allow_bypass_rls,
                     )
                 )
-
-            else:
-                # Policy exists in both metadata and database, so check if it needs to be updated
-                # Notice: Matched policy is db policy
-                tmp_policy_meta = policy_meta.model_copy()
-                tmp_policy_meta.cmd = schemas.Command(current_cmd)
-                if not schemas.policy_changed_checker(
-                    db_policy=matched_policy, metadata_policy=tmp_policy_meta
-                ):
-                    # Policy has changed, so drop and recreate it
-                    modify_ops.ops.append(
-                        DropPolicyOp(
-                            table_name=tablename,
-                            definition=matched_policy.definition,
-                            policy_name=matched_policy.custom_policy_name,
-                            cmd=current_cmd,
-                            expr=matched_policy.expression,
-                        )
-                    )
-                    modify_ops.ops.append(
-                        CreatePolicyOp(
-                            table_name=tablename,
-                            definition=policy_meta.definition,
-                            policy_name=single_policy_name,
-                            cmd=current_cmd,
-                            expr=policy_expr,
-                            allow_bypass_rls=policy_meta.allow_bypass_rls,
-                        )
-                    )
 
     # Step 6. Check if there are any policies in the database that are not in the metadata
     for policy_db in rls_policies_db:

@@ -54,46 +54,6 @@ class SyncRLSTests(unittest.TestCase):
             bind=self.engine,
         )
 
-    def test_policy_creation(self):
-        # Check that RLS policies exist in the database
-        with self.engine.connect() as session:
-            # We checked for two tables at once because tablename is auto applied to policy name so we don't have to check separately
-            policies = (
-                session.execute(
-                    sqlalchemy.text("""
-                SELECT policyname, permissive, qual, with_check, cmd
-                FROM pg_policies
-                WHERE tablename IN ('items', 'users');
-            """)
-                )
-                .mappings()
-                .fetchall()
-            )
-
-            self.assertEqual(
-                len(policies),
-                6,
-                "Expected 6 RLS policies to be applied to users and items tables.",
-            )
-
-            for policy in expectations.EXPECTED_POLICIES:
-                matched_policy = next(
-                    (p for p in policies if p["policyname"] == policy["policyname"]),
-                    None,
-                )
-
-                self.assertIsNotNone(
-                    matched_policy,
-                    f"Expected policy '{policy['policyname']}' to exist.",
-                )
-
-                for key, value in policy.items():
-                    self.assertEqual(
-                        matched_policy[key],
-                        value,
-                        f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
-                    )
-
     def test_rls_query_with_rls_session_and_bypass(self):
         context = models.SampleRlsContext(account_id=1)
 

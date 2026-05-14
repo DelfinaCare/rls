@@ -22,17 +22,15 @@ def _mock_autogen_context():
     return ctx
 
 
-def _make_boolean_policy(**kwargs) -> schemas.Permissive:
+def _sample_policy() -> schemas.Policy:
     """Create a Permissive policy with a boolean custom_expr for testing."""
-    defaults: dict[str, typing.Any] = {
-        "condition_args": [
+    return schemas.Policy.from_sqla(
+        condition_args=[
             schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
         ],
-        "cmd": [schemas.Command.select],
-        "custom_expr": lambda x: sql.column("id") == x,
-    }
-    defaults.update(kwargs)
-    return schemas.Permissive(**defaults)
+        cmd=schemas.Command.select,
+        expr=lambda x: sql.column("id") == x,
+    )
 
 
 class TestEnableRlsOp(unittest.TestCase):
@@ -375,7 +373,7 @@ class TestCompareTableLevel(unittest.TestCase):
         return modify_ops
 
     def test_enable_rls_when_meta_has_but_db_does_not(self):
-        policy = _make_boolean_policy()
+        policy = _sample_policy()
         policy.get_sql_policies(table_name="users")
         modify_ops = self._build_context(
             table_exists=True,
@@ -399,7 +397,7 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(disable_ops), 1)
 
     def test_no_rls_change_when_both_enabled(self):
-        policy = _make_boolean_policy()
+        policy = _sample_policy()
         policy.get_sql_policies(table_name="users")
         # Simulate a matching DB policy
         db_policy = schemas.Policy(
@@ -424,7 +422,7 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(disable_ops), 0)
 
     def test_creates_policy_when_missing_from_db(self):
-        policy = _make_boolean_policy()
+        policy = _sample_policy()
         policy.get_sql_policies(table_name="users")
         modify_ops = self._build_context(
             table_exists=True,
@@ -459,7 +457,7 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_recreates_policy_when_changed(self):
         """A changed policy should be dropped then re-created."""
-        policy = _make_boolean_policy()
+        policy = _sample_policy()
         policy.get_sql_policies(table_name="users")
 
         # DB policy has same name but different expression
@@ -487,7 +485,7 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_list_cmd_generates_multiple_policies(self):
         """A policy with cmd=[SELECT, UPDATE] should produce two create ops."""
-        policy = _make_boolean_policy(
+        policy = _sample_policy(
             cmd=[schemas.Command.select, schemas.Command.update],
         )
         policy.get_sql_policies(table_name="users")
@@ -505,7 +503,7 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_single_cmd_creates_policy(self):
         """A policy with a single (non-list) cmd should still create one op."""
-        policy = _make_boolean_policy(cmd=schemas.Command.select)
+        policy = _sample_policy(cmd=schemas.Command.select)
         policy.get_sql_policies(table_name="users")
 
         modify_ops = self._build_context(
@@ -522,7 +520,7 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_table_not_exists_treats_rls_as_disabled(self):
         """If the table doesn't exist yet, rls_enabled_db should be False."""
-        policy = _make_boolean_policy()
+        policy = _sample_policy()
         policy.get_sql_policies(table_name="users")
 
         modify_ops = self._build_context(

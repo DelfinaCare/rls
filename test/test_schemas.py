@@ -13,8 +13,8 @@ def _make_boolean_policy(**kwargs):
         "condition_args": [
             schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
         ],
-        "cmd": [schemas.Command.select],
-        "custom_expr": lambda x: sql.column("id") == x,
+        "cmd": schemas.Command.select,
+        "expr": lambda x: sql.column("id") == x,
     }
     defaults.update(kwargs)
     return schemas.Permissive(**defaults)

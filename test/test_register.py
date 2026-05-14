@@ -12,16 +12,16 @@ from test import models
 class TestRegister(unittest.TestCase):
     def setUp(self) -> None:
         self.sample_policies = [
-            schemas.Permissive(
-                condition_args=[
-                    schemas.ConditionArg(
-                        comparator_name="account_id", type=sqlalchemy.Integer
-                    ),
-                ],
-                cmd=[schemas.Command.select],
-                custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
-            )
-        ]
+        schemas.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.sql.column("id") == x,
+            condition_args=[
+                schemas.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=schemas.Command.all,
+        ),
+    ]
 
     def test_models_populates_rls_policies(self):
 
