@@ -6,7 +6,7 @@ import sqlalchemy
 from sqlalchemy import sql
 
 from rls import alembic_ops
-from rls import schemas
+from rls import policy
 
 
 def _mock_operations():
@@ -22,13 +22,13 @@ def _mock_autogen_context():
     return ctx
 
 
-def _sample_policy() -> schemas.Policy:
+def _sample_policy() -> policy.Policy:
     """Create a Permissive policy with a boolean custom_expr for testing."""
-    return schemas.Policy.from_sqla(
+    return policy.Policy.from_sqla(
         condition_args=[
-            schemas.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
+            policy.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer),
         ],
-        cmd=schemas.Command.select,
+        cmd=policy.Command.select,
         expr=lambda x: sql.column("id") == x,
     )
 
@@ -313,7 +313,7 @@ class TestRenderDropPolicy(unittest.TestCase):
 
 class TestCmdValue(unittest.TestCase):
     def test_with_enum(self):
-        self.assertEqual(alembic_ops._cmd_value(schemas.Command.select), "SELECT")
+        self.assertEqual(alembic_ops._cmd_value(policy.Command.select), "SELECT")
 
     def test_with_string(self):
         self.assertEqual(alembic_ops._cmd_value("ALL"), "ALL")
@@ -373,11 +373,11 @@ class TestCompareTableLevel(unittest.TestCase):
         return modify_ops
 
     def test_enable_rls_when_meta_has_but_db_does_not(self):
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=False,
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         enable_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
@@ -396,19 +396,19 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(disable_ops), 1)
 
     def test_no_rls_change_when_both_enabled(self):
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
         # Simulate a matching DB policy
-        db_policy = schemas.Policy(
-            name=policy.name,
-            cmd=policy.cmd,
-            expr=policy.expr,
-            policy_type=policy.policy_type,
+        db_policy = policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
+            expr=meta_policy.expr,
+            policy_type=meta_policy.policy_type,
         )
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
             db_policies=[db_policy],
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         enable_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
@@ -420,12 +420,12 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(disable_ops), 0)
 
     def test_creates_policy_when_missing_from_db(self):
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
             db_policies=[],
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         create_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
@@ -434,11 +434,11 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(create_ops[0].table_name, "users")
 
     def test_drops_policy_when_missing_from_metadata(self):
-        db_policy = schemas.Policy(
+        db_policy = policy.Policy(
             name="orphan_policy",
-            cmd=schemas.Command.select,
+            cmd=policy.Command.select,
             expr="true",
-            policy_type=schemas.PolicyType.permissive,
+            policy_type=policy.PolicyType.permissive,
         )
         modify_ops = self._build_context(
             table_exists=True,
@@ -454,21 +454,21 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_recreates_policy_when_changed(self):
         """A changed policy should be dropped then re-created."""
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
 
         # DB policy has same name but different expression
-        db_policy = schemas.Policy(
-            name=policy.name,
-            cmd=policy.cmd,
+        db_policy = policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
             expr="totally_different_expression",
-            policy_type=policy.policy_type,
+            policy_type=meta_policy.policy_type,
         )
 
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
             db_policies=[db_policy],
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         drop_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.DropPolicyOp)
@@ -482,13 +482,13 @@ class TestCompareTableLevel(unittest.TestCase):
     def test_multiple_policies_generate_multiple_create_ops(self):
         """Multiple metadata policies should each produce a separate create op."""
         policy_select = _sample_policy()
-        policy_update = schemas.Policy.from_sqla(
+        policy_update = policy.Policy.from_sqla(
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.update,
+            cmd=policy.Command.update,
             expr=lambda x: sql.column("id") == x,
         )
         modify_ops = self._build_context(
@@ -504,13 +504,13 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_single_cmd_creates_policy(self):
         """A policy with a single cmd should create one op."""
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
 
         modify_ops = self._build_context(
             table_exists=True,
             rls_enabled=True,
             db_policies=[],
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         create_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
@@ -520,12 +520,12 @@ class TestCompareTableLevel(unittest.TestCase):
 
     def test_table_not_exists_treats_rls_as_disabled(self):
         """If the table doesn't exist yet, rls_enabled_db should be False."""
-        policy = _sample_policy()
+        meta_policy = _sample_policy()
 
         modify_ops = self._build_context(
             table_exists=False,
             rls_enabled=False,
-            meta_policies={"users": [policy]},
+            meta_policies={"users": [meta_policy]},
         )
         # Should get an enable op since DB doesn't have RLS
         enable_ops = [

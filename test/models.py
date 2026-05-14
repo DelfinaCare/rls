@@ -5,7 +5,7 @@ from sqlalchemy import sql
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import register
-from rls import schemas
+from rls import policy
 
 
 class Base(orm.DeclarativeBase):
@@ -22,14 +22,14 @@ class User(sa_asyncio.AsyncAttrs, Base):
     username = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
 
     __rls_policies__ = [
-        schemas.Policy.from_sqla(
+        policy.Policy.from_sqla(
             expr=lambda x: sql.column("id") == x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.all,
+            cmd=policy.Command.all,
         ),
     ]
 
@@ -47,32 +47,32 @@ class Item(Base):
     owner = orm.relationship("User")
 
     __rls_policies__ = [
-        schemas.Policy.from_sqla(
+        policy.Policy.from_sqla(
             expr=lambda x: sql.column("owner_id") == x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.all,
+            cmd=policy.Command.all,
         ),
-        schemas.Policy.from_sqla(
+        policy.Policy.from_sqla(
             expr=lambda x: sql.column("owner_id") > x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.select,
+            cmd=policy.Command.select,
         ),
-        schemas.Policy.from_sqla(
+        policy.Policy.from_sqla(
             expr=lambda x: sql.column("owner_id") <= x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.all,
+            cmd=policy.Command.all,
         ),
     ]
 

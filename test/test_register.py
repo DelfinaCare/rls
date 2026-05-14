@@ -5,21 +5,21 @@ import sqlalchemy
 from sqlalchemy import orm
 
 from rls import register
-from rls import schemas
+from rls import policy
 from test import models
 
 
 class TestRegister(unittest.TestCase):
     def setUp(self) -> None:
         self.sample_policies = [
-        schemas.Policy.from_sqla(
+        policy.Policy.from_sqla(
             expr=lambda x: sqlalchemy.sql.column("id") == x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=schemas.Command.all,
+            cmd=policy.Command.all,
         ),
     ]
 

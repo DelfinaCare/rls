@@ -116,7 +116,7 @@ class Policy(pydantic.BaseModel):
                 [cmd.value for cmd in cmd] if isinstance(cmd, list) else [cmd.value]
             )
             name_parts.append(hashlib.sha256(expr.encode()).hexdigest()[:8])
-        name = "_".join(name_parts).lower()
+            name = "_".join(name_parts).lower()
         return cls(expr=expr, cmd=cmd, name=name, policy_type=policy_type)
 
     def render_policy(self, table_name: str) -> sqlalchemy.TextClause:

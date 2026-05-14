@@ -6,7 +6,7 @@ from alembic import operations as alembic_operations
 from sqlalchemy.dialects import postgresql as pg_dialect
 
 from . import _sql_gen
-from . import schemas
+from . import policy
 
 
 @alembic_operations.Operations.register_operation("enable_rls")
@@ -113,7 +113,7 @@ def render_disable_rls(autogen_context, op):
     return "typing.cast(alembic_ops.RLSOp, op).disable_rls(%r)" % (op.tablename)
 
 
-def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
+def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     query = (
@@ -127,11 +127,11 @@ def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
     policies = []
     for row in result:
         policy_data = dict(zip(columns, row))
-        policy = schemas.Policy(
+        policy = policy.Policy(
             name=policy_data["policyname"],
-            cmd=schemas.Command(policy_data["cmd"]),
+            cmd=policy.Command(policy_data["cmd"]),
             expr=policy_data.get("with_check") or policy_data.get("qual") or "",
-            policy_type=schemas.PolicyType(policy_data["permissive"]),
+            policy_type=policy.PolicyType(policy_data["permissive"]),
         )
         policies.append(policy)
 
@@ -161,9 +161,9 @@ def check_rls_enabled(conn, schemaname, tablename) -> bool:
     return result
 
 
-def _cmd_value(cmd: schemas.Command | str) -> str:
+def _cmd_value(cmd: policy.Command | str) -> str:
     """Return the plain string value of a Command enum member or a plain string."""
-    return cmd.value if isinstance(cmd, schemas.Command) else cmd
+    return cmd.value if isinstance(cmd, policy.Command) else cmd
 
 
 @autogenerate.comparators.dispatch_for("table")
@@ -218,7 +218,7 @@ def compare_table_level(
 
         else:
             # Policy exists in both metadata and database, so check if it needs to be updated
-            if not schemas.policy_changed_checker(
+            if not policy.policy_changed_checker(
                 db_policy=matched_policy, metadata_policy=policy_meta
             ):
                 # Policy has changed, so drop and recreate it
@@ -327,13 +327,13 @@ class DropPolicyOp(alembic_operations.MigrateOperation):
 
 @alembic_operations.Operations.implementation_for(CreatePolicyOp)
 def create_policy(operations, operation):
-    policy = schemas.Policy(
+    p = policy.Policy(
         name=operation.policy_name,
-        cmd=schemas.Command(operation.cmd),
+        cmd=policy.Command(operation.cmd),
         expr=operation.expr,
-        policy_type=schemas.PolicyType(operation.policy_type),
+        policy_type=policy.PolicyType(operation.policy_type),
     )
-    operations.execute(policy.render_policy(operation.table_name))
+    operations.execute(p.render_policy(operation.table_name))
 
 
 @alembic_operations.Operations.implementation_for(DropPolicyOp)
