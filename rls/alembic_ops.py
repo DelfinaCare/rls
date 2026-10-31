@@ -117,7 +117,7 @@ def render_disable_rls(autogen_context, op):
 def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
-    query = (
+    query: sa.Select = (
         sa.select(*[sa.column(c) for c in columns])
         .select_from(sa.table("pg_policies"))
         .where(sa.column("schemaname") == (schemaname or "public"))

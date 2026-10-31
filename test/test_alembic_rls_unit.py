@@ -35,6 +35,34 @@ def _make_boolean_policy(**kwargs) -> schemas.Permissive:
     return schemas.Permissive(**defaults)
 
 
+class TestCheckRlsPolicies(unittest.TestCase):
+    def test_query_and_policy_mapping(self) -> None:
+        for schema in (None, "myschema"):
+            with self.subTest(schema=schema):
+                conn = mock.MagicMock()
+                conn.execute.return_value.fetchall.return_value = [
+                    ("pol1", "PERMISSIVE", "SELECT", ["public"], "id = 1", None)
+                ]
+
+                policies = alembic_ops.check_rls_policies(conn, schema, "users")
+
+                conn.execute.assert_called_once()
+                query = conn.execute.call_args[0][0]
+                self.assertIsInstance(query, sqlalchemy.Select)
+                self.assertEqual(
+                    list(query.selected_columns.keys()),
+                    ["policyname", "permissive", "cmd", "roles", "qual", "with_check"],
+                )
+                self.assertEqual(
+                    query.compile().params,
+                    {"schemaname_1": schema or "public", "tablename_1": "users"},
+                )
+                self.assertEqual(len(policies), 1)
+                self.assertEqual(policies[0].custom_policy_name, "pol1")
+                self.assertEqual(policies[0].cmd, schemas.Command.select)
+                self.assertEqual(policies[0].expression, "id = 1")
+
+
 class TestEnableRlsOp(unittest.TestCase):
     def test_init_without_schema(self):
         op = alembic_ops.EnableRlsOp("users")
