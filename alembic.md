@@ -31,12 +31,13 @@ Creates a policy for a table with the given name, definition, policy name, comma
 
 ```python
 from alembic import op
+
 op.create_policy(
     table_name="accounts",
     definition="PERMISSIVE",
     policy_name="accounts_select",
     cmd="select",
-    expr="true"
+    expr="true",
 )
 ```
 
@@ -51,7 +52,7 @@ op.drop_policy(
     definition="PERMISSIVE",
     policy_name="accounts_select",
     cmd="select",
-    expr="true"
+    expr="true",
 )
 ```
 
@@ -64,9 +65,7 @@ Enables row level security on a table with the given name
 ```python
 from alembic import op
 
-op.enable_rls(
-    table_name="accounts"
-)
+op.enable_rls(table_name="accounts")
 ```
 
 ### op.disable_rls(table_name: str)
@@ -75,9 +74,7 @@ Disables row level security on a table with the given name
 ```python
 from alembic import op
 
-op.disable_rls(
-    table_name="accounts"
-)
+op.disable_rls(table_name="accounts")
 ```
 
 
