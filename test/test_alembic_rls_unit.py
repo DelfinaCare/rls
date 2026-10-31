@@ -457,18 +457,41 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(drop_ops), 1)
         self.assertEqual(drop_ops[0].policy_name, "orphan_policy")
 
-    def test_recreates_policy_when_changed(self):
-        """A changed policy should be dropped then re-created."""
+    def test_no_ops_when_names_match_despite_rewritten_expression(self):
+        """Postgres rewrites stored expressions; matching names means no change."""
         policy = _make_boolean_policy()
         policy.get_sql_policies(table_name="users")
 
-        # DB policy has same name but different expression
         db_policy = schemas.Policy(
             definition="PERMISSIVE",
             cmd=schemas.Command.select,
             custom_policy_name=policy.policy_names[0],
         )
-        db_policy.expression = "totally_different_expression"
+        db_policy.expression = "postgres_rewritten_expression"
+
+        modify_ops = self._build_context(
+            table_exists=True,
+            rls_enabled=True,
+            db_policies=[db_policy],
+            meta_policies={"users": [policy]},
+        )
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_recreates_policy_when_changed(self):
+        """A changed policy should be dropped then re-created."""
+        old_policy = _make_boolean_policy(custom_expr=lambda x: sql.column("id") > x)
+        old_policy.get_sql_policies(table_name="users")
+        policy = _make_boolean_policy()
+        policy.get_sql_policies(table_name="users")
+
+        # DB policy was created from a different version of the policy, so
+        # its name carries a different hash.
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+            custom_policy_name=old_policy.policy_names[0],
+        )
+        db_policy.expression = old_policy.expression
 
         modify_ops = self._build_context(
             table_exists=True,
@@ -482,8 +505,14 @@ class TestCompareTableLevel(unittest.TestCase):
         create_ops = [
             op for op in modify_ops.ops if isinstance(op, alembic_ops.CreatePolicyOp)
         ]
-        self.assertGreaterEqual(len(drop_ops), 1)
-        self.assertGreaterEqual(len(create_ops), 1)
+        self.assertEqual(len(drop_ops), 1)
+        self.assertEqual(len(create_ops), 1)
+        self.assertEqual(drop_ops[0].policy_name, old_policy.policy_names[0])
+        self.assertEqual(create_ops[0].policy_name, policy.policy_names[0])
+        # Drops are emitted before creates.
+        self.assertLess(
+            modify_ops.ops.index(drop_ops[0]), modify_ops.ops.index(create_ops[0])
+        )
 
     def test_list_cmd_generates_multiple_policies(self):
         """A policy with cmd=[SELECT, UPDATE] should produce two create ops."""

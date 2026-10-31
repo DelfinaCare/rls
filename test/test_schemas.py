@@ -300,12 +300,51 @@ class TestPolicy(unittest.TestCase):
     def test_get_sql_policies_custom_policy_name(self):
         policy = _make_boolean_policy(custom_policy_name="my_custom")
         policy.get_sql_policies(table_name="users", name_suffix="1")
-        self.assertEqual(policy.policy_names, ["users_my_custom_select_policy_1"])
+        self.assertEqual(len(policy.policy_names), 1)
+        self.assertRegex(
+            policy.policy_names[0], r"^users_my_custom_select_policy_1_[0-9a-f]{8}$"
+        )
 
     def test_get_sql_policies_default_policy_name(self):
         policy = _make_boolean_policy(custom_policy_name=None)
         policy.get_sql_policies(table_name="users", name_suffix="0")
-        self.assertEqual(policy.policy_names, ["users_permissive_select_policy_0"])
+        self.assertEqual(len(policy.policy_names), 1)
+        self.assertRegex(
+            policy.policy_names[0], r"^users_permissive_select_policy_0_[0-9a-f]{8}$"
+        )
+
+    def test_policy_name_in_generated_sql(self):
+        policy = _make_boolean_policy()
+        results = policy.get_sql_policies(table_name="users", name_suffix="0")
+        self.assertIn(f"CREATE POLICY {policy.policy_names[0]} ON", str(results[0]))
+
+    def test_policy_name_stable_for_same_policy(self):
+        first = _make_boolean_policy()
+        second = _make_boolean_policy()
+        first.get_sql_policies(table_name="users", name_suffix="0")
+        second.get_sql_policies(table_name="users", name_suffix="0")
+        self.assertEqual(first.policy_names, second.policy_names)
+
+    def test_policy_name_changes_when_expression_changes(self):
+        first = _make_boolean_policy()
+        second = _make_boolean_policy(custom_expr=lambda x: sql.column("id") > x)
+        first.get_sql_policies(table_name="users", name_suffix="0")
+        second.get_sql_policies(table_name="users", name_suffix="0")
+        self.assertNotEqual(first.policy_names, second.policy_names)
+
+    def test_policy_name_changes_when_bypass_changes(self):
+        first = _make_boolean_policy()
+        second = _make_boolean_policy(allow_bypass_rls=False)
+        first.get_sql_policies(table_name="users", name_suffix="0")
+        second.get_sql_policies(table_name="users", name_suffix="0")
+        self.assertNotEqual(first.policy_names, second.policy_names)
+
+    def test_long_policy_name_fits_postgres_identifier_limit(self):
+        policy = _make_boolean_policy(custom_policy_name="x" * 100)
+        policy.get_sql_policies(table_name="users", name_suffix="0")
+        name = policy.policy_names[0]
+        self.assertLessEqual(len(name.encode("utf-8")), 63)
+        self.assertRegex(name, r"_[0-9a-f]{8}$")
 
     def test_policy_names_reset_on_reinvocation(self):
         policy = _make_boolean_policy()
