@@ -105,13 +105,13 @@ def _add_rls_imports(autogen_context: typing.Any) -> None:
 @autogenerate.renderers.dispatch_for(EnableRlsOp)
 def render_enable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return "typing.cast(alembic_ops.RLSOp, op).enable_rls(%r)" % (op.tablename)
+    return f"typing.cast(alembic_ops.RLSOp, op).enable_rls({op.tablename!r})"
 
 
 @autogenerate.renderers.dispatch_for(DisableRlsOp)
 def render_disable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
-    return "typing.cast(alembic_ops.RLSOp, op).disable_rls(%r)" % (op.tablename)
+    return f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r})"
 
 
 def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:

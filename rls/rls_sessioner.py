@@ -19,7 +19,7 @@ class ContextGetter(abc.ABC):
 class RlsSessioner:
     def __init__(self, sessionmaker: orm.sessionmaker, context_getter: ContextGetter):
         if not issubclass(sessionmaker.class_, session.RlsSession):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 - Preserve the public exception type.
                 "sessionmaker class must be RlsSession or a subclass of RlsSession"
             )
 
@@ -46,7 +46,7 @@ class AsyncRlsSessioner:
         context_getter: ContextGetter,
     ):
         if not issubclass(sessionmaker.class_, session.AsyncRlsSession):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 - Preserve the public exception type.
                 "sessionmaker class must be AsyncRlsSession or a subclass of AsyncRlsSession"
             )
 

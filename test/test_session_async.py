@@ -69,10 +69,9 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """AsyncRlsSession with bypass_rls returns all users."""
         context = models.SampleRlsContext(account_id=1)
         rls_sess = session.AsyncRlsSession(context=context, bind=self.engine)
-        async with rls_sess.begin():
-            async with rls_sess.bypass_rls():
-                result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(result, [1, 2])
+        async with rls_sess.begin(), rls_sess.bypass_rls():
+            result = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result, [1, 2])
         await rls_sess.close()
 
     async def test_bypass_rls_setting_single(self):
@@ -93,9 +92,8 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Exceptions raised inside bypass_rls propagate to the caller."""
         rls_sess = self._new_session()
         with self.assertRaises(sqlalchemy.exc.DataError):
-            async with rls_sess.begin():
-                async with rls_sess.bypass_rls():
-                    await rls_sess.execute(_ERROR_QUERY)
+            async with rls_sess.begin(), rls_sess.bypass_rls():
+                await rls_sess.execute(_ERROR_QUERY)
         await rls_sess.close()
 
     async def test_exception_without_bypass_propagates(self):
@@ -110,9 +108,8 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """After a SQL exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()
         with self.assertRaises(sqlalchemy.exc.DataError):
-            async with rls_sess.begin():
-                async with rls_sess.bypass_rls():
-                    await rls_sess.execute(_ERROR_QUERY)
+            async with rls_sess.begin(), rls_sess.bypass_rls():
+                await rls_sess.execute(_ERROR_QUERY)
         # _rls_bypass flag must be cleared regardless of exception
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
@@ -140,9 +137,8 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """After a Python exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()
         with self.assertRaises(ValueError):
-            async with rls_sess.begin():
-                async with rls_sess.bypass_rls():
-                    raise ValueError("Test")
+            async with rls_sess.begin(), rls_sess.bypass_rls():
+                raise ValueError("Test")
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         async with rls_sess.begin():
             self.assertFalse(await rls_bypassed(rls_sess))
@@ -180,10 +176,9 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         transaction."""
         rls_sess = self._new_session(account_id=1)
         with self.assertRaises(sqlalchemy.exc.DataError):
-            async with rls_sess.begin():
-                async with rls_sess.bypass_rls():
-                    # Error propagates out of both the bypass and begin contexts.
-                    await rls_sess.execute(_ERROR_QUERY)
+            async with rls_sess.begin(), rls_sess.bypass_rls():
+                # Error propagates out of both the bypass and begin contexts.
+                await rls_sess.execute(_ERROR_QUERY)
         # Bypass depth must be reset regardless of the exception path.
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # In the next transaction RLS must filter rows to only account_id=1.
@@ -257,12 +252,11 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        async with rls_sess1.begin():
-            async with rls_sess2.begin():
-                result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
-                result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(result1, [1])
-                self.assertEqual(result2, [2])
+        async with rls_sess1.begin(), rls_sess2.begin():
+            result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+            result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result1, [1])
+            self.assertEqual(result2, [2])
         await rls_sess1.close()
         await rls_sess2.close()
 
@@ -289,46 +283,43 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Bypassing RLS on one async session does not affect a concurrent session."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        async with rls_sess1.begin():
-            async with rls_sess2.begin():
-                # Without bypass each session sees only its own user
-                result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
-                result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(result1, [1])
-                self.assertEqual(result2, [2])
+        async with rls_sess1.begin(), rls_sess2.begin():
+            # Without bypass each session sees only its own user
+            result1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+            result2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result1, [1])
+            self.assertEqual(result2, [2])
 
-                # Bypass session1 only
-                async with rls_sess1.bypass_rls():
+            # Bypass session1 only
+            async with rls_sess1.bypass_rls():
+                result1_bypass = list(
+                    (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
+                )
+                result2_no_bypass = list(
+                    (await rls_sess2.execute(_USER_ID_QUERY)).scalars()
+                )
+                self.assertEqual(
+                    result1_bypass, [1, 2], "Bypassed session should see all users."
+                )
+                self.assertEqual(
+                    result2_no_bypass,
+                    [2],
+                    "Non-bypassed session should see only its account's user.",
+                )
+                # Now both are bypassed
+                async with rls_sess2.bypass_rls():
                     result1_bypass = list(
                         (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
                     )
-                    result2_no_bypass = list(
+                    result2_bypass = list(
                         (await rls_sess2.execute(_USER_ID_QUERY)).scalars()
                     )
-                    self.assertEqual(
-                        result1_bypass, [1, 2], "Bypassed session should see all users."
-                    )
-                    self.assertEqual(
-                        result2_no_bypass,
-                        [2],
-                        "Non-bypassed session should see only its account's user.",
-                    )
-                    # Now both are bypassed
-                    async with rls_sess2.bypass_rls():
-                        result1_bypass = list(
-                            (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
-                        )
-                        result2_bypass = list(
-                            (await rls_sess2.execute(_USER_ID_QUERY)).scalars()
-                        )
-                        self.assertEqual(result1_bypass, [1, 2])
-                        self.assertEqual(result2_bypass, [1, 2])
+                    self.assertEqual(result1_bypass, [1, 2])
+                    self.assertEqual(result2_bypass, [1, 2])
 
-                # After bypass exits, session1 is restricted again
-                result1_after = list(
-                    (await rls_sess1.execute(_USER_ID_QUERY)).scalars()
-                )
-                self.assertEqual(result1_after, [1])
+            # After bypass exits, session1 is restricted again
+            result1_after = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(result1_after, [1])
         await rls_sess1.close()
         await rls_sess2.close()
 
@@ -616,12 +607,11 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         """Two async sessions with different contexts see different data."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        async with rls_sess1.begin():
-            async with rls_sess2.begin():
-                r1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
-                r2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
-                self.assertEqual(r1, [1])
-                self.assertEqual(r2, [2])
+        async with rls_sess1.begin(), rls_sess2.begin():
+            r1 = list((await rls_sess1.execute(_USER_ID_QUERY)).scalars())
+            r2 = list((await rls_sess2.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(r1, [1])
+            self.assertEqual(r2, [2])
         await rls_sess1.close()
         await rls_sess2.close()
 
@@ -706,13 +696,10 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await rls_sess.close()
             await rls_sess_acct2.close()
-            with self.instance.admin_engine.connect() as conn:
-                with conn.begin():
-                    conn.execute(
-                        sqlalchemy.text(
-                            "UPDATE users SET username = 'user1' WHERE id = 1"
-                        )
-                    )
+            with self.instance.admin_engine.connect() as conn, conn.begin():
+                conn.execute(
+                    sqlalchemy.text("UPDATE users SET username = 'user1' WHERE id = 1")
+                )
 
 
 if __name__ == "__main__":

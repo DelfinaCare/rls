@@ -1,3 +1,4 @@
+import typing
 from collections import abc
 
 import pydantic
@@ -120,7 +121,7 @@ class RlsSessionTransaction:
         self._transaction = transaction
         self._session = session
 
-    def __enter__(self) -> "RlsSessionTransaction":
+    def __enter__(self) -> typing.Self:
         self._transaction.__enter__()
         self._session._rls_dirty = True
         return self
@@ -197,7 +198,7 @@ class RlsAsyncSessionTransaction:
         self._transaction = transaction
         self._session = session
 
-    async def start(self, is_ctxmanager: bool = False) -> "RlsAsyncSessionTransaction":
+    async def start(self, is_ctxmanager: bool = False) -> typing.Self:
         # Unlike the sync SessionTransaction which begins implicitly via
         # __enter__, AsyncSessionTransaction exposes an explicit start() method.
         # The is_ctxmanager flag tells SQLAlchemy whether the transaction was
@@ -217,7 +218,7 @@ class RlsAsyncSessionTransaction:
         # manager.  This makes ``tx = await session.begin()`` possible.
         return self.start().__await__()
 
-    async def __aenter__(self) -> "RlsAsyncSessionTransaction":
+    async def __aenter__(self) -> typing.Self:
         return await self.start(is_ctxmanager=True)
 
     async def __aexit__(self, type_: object, value: object, traceback: object) -> None:

@@ -151,27 +151,30 @@ class SyncRLSTests(unittest.TestCase):
     def test_exception_during_bypass_propagates(self):
         """Exceptions raised inside bypass_rls propagate to the caller."""
         rls_sess = self._new_session()
-        with self.assertRaises(sqlalchemy.exc.DataError):
-            with rls_sess.begin():
-                with rls_sess.bypass_rls():
-                    rls_sess.execute(_ERROR_QUERY)
+        with (
+            self.assertRaises(sqlalchemy.exc.DataError),
+            rls_sess.begin(),
+            rls_sess.bypass_rls(),
+        ):
+            rls_sess.execute(_ERROR_QUERY)
         rls_sess.close()
 
     def test_exception_without_bypass_propagates(self):
         """Exceptions raised outside bypass_rls propagate to the caller."""
         rls_sess = self._new_session()
-        with self.assertRaises(sqlalchemy.exc.DataError):
-            with rls_sess.begin():
-                rls_sess.execute(_ERROR_QUERY)
+        with self.assertRaises(sqlalchemy.exc.DataError), rls_sess.begin():
+            rls_sess.execute(_ERROR_QUERY)
         rls_sess.close()
 
     def test_sql_exception_during_bypass_restores_state(self):
         """After a SQL exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()
-        with self.assertRaises(sqlalchemy.exc.DataError):
-            with rls_sess.begin():
-                with rls_sess.bypass_rls():
-                    rls_sess.execute(_ERROR_QUERY)
+        with (
+            self.assertRaises(sqlalchemy.exc.DataError),
+            rls_sess.begin(),
+            rls_sess.bypass_rls(),
+        ):
+            rls_sess.execute(_ERROR_QUERY)
         # _rls_bypass flag must be cleared regardless of exception
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
@@ -196,10 +199,12 @@ class SyncRLSTests(unittest.TestCase):
     def test_python_exception_during_bypass_restores_state(self):
         """After a Python exception inside bypass_rls, bypass state is cleared."""
         rls_sess = self._new_session()
-        with self.assertRaises(ValueError):
-            with rls_sess.begin():
-                with rls_sess.bypass_rls():
-                    raise ValueError("Test")
+        with (
+            self.assertRaises(ValueError),
+            rls_sess.begin(),
+            rls_sess.bypass_rls(),
+        ):
+            raise ValueError("Test")
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         with rls_sess.begin():
             self.assertFalse(rls_bypassed(rls_sess))
@@ -217,9 +222,11 @@ class SyncRLSTests(unittest.TestCase):
                 rls_sess.execute(_NOOP_QUERY)
                 # Catch the SQL error inside the bypass context using a savepoint
                 # so the outer transaction remains usable.
-                with self.assertRaises(sqlalchemy.exc.DataError):
-                    with rls_sess.begin_nested():
-                        rls_sess.execute(_ERROR_QUERY)
+                with (
+                    self.assertRaises(sqlalchemy.exc.DataError),
+                    rls_sess.begin_nested(),
+                ):
+                    rls_sess.execute(_ERROR_QUERY)
                 # Still inside bypass_rls: bypass must still be active and all
                 # rows should be visible.
                 self.assertTrue(rls_bypassed(rls_sess))
@@ -236,11 +243,13 @@ class SyncRLSTests(unittest.TestCase):
         bypass depth resets to 0 and RLS data filtering works in the next
         transaction."""
         rls_sess = self._new_session(account_id=1)
-        with self.assertRaises(sqlalchemy.exc.DataError):
-            with rls_sess.begin():
-                with rls_sess.bypass_rls():
-                    # Error propagates out of both the bypass and begin contexts.
-                    rls_sess.execute(_ERROR_QUERY)
+        with (
+            self.assertRaises(sqlalchemy.exc.DataError),
+            rls_sess.begin(),
+            rls_sess.bypass_rls(),
+        ):
+            # Error propagates out of both the bypass and begin contexts.
+            rls_sess.execute(_ERROR_QUERY)
         # Bypass depth must be reset regardless of the exception path.
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # In the next transaction RLS must filter rows to only account_id=1.
@@ -253,42 +262,35 @@ class SyncRLSTests(unittest.TestCase):
         """Bypassing RLS on one session does not affect a concurrent session."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        with rls_sess1.begin():
-            with rls_sess2.begin():
-                # Without bypass each session sees only its own user
-                result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(result1, [1])
-                self.assertEqual(result2, [2])
+        with rls_sess1.begin(), rls_sess2.begin():
+            # Without bypass each session sees only its own user
+            result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+            result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result1, [1])
+            self.assertEqual(result2, [2])
 
-                # Bypass session1 only
-                with rls_sess1.bypass_rls():
+            # Bypass session1 only
+            with rls_sess1.bypass_rls():
+                result1_bypass = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+                result2_no_bypass = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(
+                    result1_bypass, [1, 2], "Bypassed session should see all users."
+                )
+                self.assertEqual(
+                    result2_no_bypass,
+                    [2],
+                    "Non-bypassed session should see only its account's user.",
+                )
+                # Now both are bypassed
+                with rls_sess2.bypass_rls():
                     result1_bypass = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                    result2_no_bypass = list(
-                        rls_sess2.execute(_USER_ID_QUERY).scalars()
-                    )
-                    self.assertEqual(
-                        result1_bypass, [1, 2], "Bypassed session should see all users."
-                    )
-                    self.assertEqual(
-                        result2_no_bypass,
-                        [2],
-                        "Non-bypassed session should see only its account's user.",
-                    )
-                    # Now both are bypassed
-                    with rls_sess2.bypass_rls():
-                        result1_bypass = list(
-                            rls_sess1.execute(_USER_ID_QUERY).scalars()
-                        )
-                        result2_bypass = list(
-                            rls_sess2.execute(_USER_ID_QUERY).scalars()
-                        )
-                        self.assertEqual(result1_bypass, [1, 2])
-                        self.assertEqual(result2_bypass, [1, 2])
+                    result2_bypass = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+                    self.assertEqual(result1_bypass, [1, 2])
+                    self.assertEqual(result2_bypass, [1, 2])
 
-                # After bypass exits, session1 is restricted again
-                result1_after = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(result1_after, [1])
+            # After bypass exits, session1 is restricted again
+            result1_after = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result1_after, [1])
         rls_sess1.close()
         rls_sess2.close()
 
@@ -356,12 +358,11 @@ class SyncRLSTests(unittest.TestCase):
         """Sessions created with different account_ids each see only their own user."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        with rls_sess1.begin():
-            with rls_sess2.begin():
-                result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(result1, [1])
-                self.assertEqual(result2, [2])
+        with rls_sess1.begin(), rls_sess2.begin():
+            result1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+            result2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(result1, [1])
+            self.assertEqual(result2, [2])
         rls_sess1.close()
         rls_sess2.close()
 
@@ -616,10 +617,9 @@ class SyncRLSTests(unittest.TestCase):
     def test_transaction_context_exit_rollback_on_exception_sets_dirty(self):
         """Context-manager exit with an exception (implicit rollback) marks dirty."""
         rls_sess = self._new_session()
-        with self.assertRaises(ValueError):
-            with rls_sess.begin():
-                rls_sess._rls_dirty = False
-                raise ValueError("boom")
+        with self.assertRaises(ValueError), rls_sess.begin():
+            rls_sess._rls_dirty = False
+            raise ValueError("boom")
         self.assertTrue(rls_sess._rls_dirty)
         rls_sess.close()
 
@@ -637,9 +637,8 @@ class SyncRLSTests(unittest.TestCase):
     def test_rls_reapplied_after_transaction_rollback_on_error(self):
         """After an exception rolls back the transaction, a new begin() still applies RLS."""
         rls_sess = self._new_session(account_id=1)
-        with self.assertRaises(ValueError):
-            with rls_sess.begin():
-                raise ValueError("test")
+        with self.assertRaises(ValueError), rls_sess.begin():
+            raise ValueError("test")
         with rls_sess.begin():
             result = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(result, [1])
@@ -660,12 +659,11 @@ class SyncRLSTests(unittest.TestCase):
         """Two sessions with different contexts see different data."""
         rls_sess1 = self._new_session(account_id=1)
         rls_sess2 = self._new_session(account_id=2)
-        with rls_sess1.begin():
-            with rls_sess2.begin():
-                r1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
-                r2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
-                self.assertEqual(r1, [1])
-                self.assertEqual(r2, [2])
+        with rls_sess1.begin(), rls_sess2.begin():
+            r1 = list(rls_sess1.execute(_USER_ID_QUERY).scalars())
+            r2 = list(rls_sess2.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(r1, [1])
+            self.assertEqual(r2, [2])
         rls_sess1.close()
         rls_sess2.close()
 
@@ -736,13 +734,10 @@ class SyncRLSTests(unittest.TestCase):
         finally:
             rls_sess.close()
             rls_sess_acct2.close()
-            with self.instance.admin_engine.connect() as conn:
-                with conn.begin():
-                    conn.execute(
-                        sqlalchemy.text(
-                            "UPDATE users SET username = 'user1' WHERE id = 1"
-                        )
-                    )
+            with self.instance.admin_engine.connect() as conn, conn.begin():
+                conn.execute(
+                    sqlalchemy.text("UPDATE users SET username = 'user1' WHERE id = 1")
+                )
 
 
 if __name__ == "__main__":
