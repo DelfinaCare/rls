@@ -1,3 +1,5 @@
+import typing
+
 import pydantic
 import sqlalchemy
 from sqlalchemy import orm
@@ -21,7 +23,7 @@ class User(sa_asyncio.AsyncAttrs, Base):
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
     username = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
 
-    __rls_policies__ = [
+    __rls_policies__: typing.ClassVar[list[schemas.Policy]] = [
         schemas.Permissive(
             condition_args=[
                 schemas.ConditionArg(
@@ -47,7 +49,7 @@ class Item(Base):
 
     owner = orm.relationship("User")
 
-    __rls_policies__ = [
+    __rls_policies__: typing.ClassVar[list[schemas.Policy]] = [
         schemas.Permissive(
             condition_args=[
                 schemas.ConditionArg(

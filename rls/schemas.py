@@ -61,7 +61,9 @@ def compile_custom_expr(
     clause_element = custom_expr(*args)
 
     if not isinstance(clause_element.type, sqlalchemy.Boolean):
-        raise ValueError("Expression does not evaluate to a Boolean value")
+        raise ValueError(  # noqa: TRY004 - Preserve the public exception type.
+            "Expression does not evaluate to a Boolean value"
+        )
 
     return str(clause_element.compile(compile_kwargs={"literal_binds": True}))
 
