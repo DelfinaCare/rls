@@ -6,6 +6,8 @@ import sqlalchemy
 # Postgres silently truncates identifiers longer than NAMEDATALEN - 1 bytes.
 _MAX_IDENTIFIER_BYTES = 63
 _POLICY_HASH_LENGTH = 8
+# Lowercase, since Postgres folds unquoted identifiers to lowercase.
+_POLICY_HASH_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 
 def hashed_policy_name(base_name: str, policy_sql: str) -> str:
@@ -20,8 +22,13 @@ def hashed_policy_name(base_name: str, policy_sql: str) -> str:
     fits within Postgres' identifier length limit (otherwise Postgres would
     truncate the hash away).
     """
-    digest = hashlib.sha256(policy_sql.encode("utf-8")).hexdigest()
-    digest = digest[:_POLICY_HASH_LENGTH]
+    value = int.from_bytes(hashlib.sha256(policy_sql.encode("utf-8")).digest())
+    base_len = len(_POLICY_HASH_ALPHABET)
+    chars = []
+    for _ in range(_POLICY_HASH_LENGTH):
+        value, rem = divmod(value, base_len)
+        chars.append(_POLICY_HASH_ALPHABET[rem])
+    digest = "".join(chars)
     max_base_bytes = _MAX_IDENTIFIER_BYTES - len(digest) - 1
     base = base_name.encode("utf-8")[:max_base_bytes].decode("utf-8", "ignore")
     return f"{base}_{digest}"
