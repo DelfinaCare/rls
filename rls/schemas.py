@@ -149,12 +149,11 @@ class Policy(pydantic.BaseModel):
             if self.custom_policy_name is not None:
                 base_policy_name = (
                     f"{table_name}_{self.custom_policy_name}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
+                    f"_{cmd_value}_{name_suffix}".lower()
                 )
             else:
                 base_policy_name = (
-                    f"{table_name}_{self.definition}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
+                    f"{table_name}_{self.definition}_{cmd_value}_{name_suffix}".lower()
                 )
 
             # Hash the SQL generated with the base name, then regenerate the

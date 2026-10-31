@@ -26,7 +26,7 @@ To create a policy in alembic revision `manually` you have to keep in mind the f
 
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
 
-**Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy's generated SQL (e.g. `users_my_policy_select_policy_0_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
+**Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy's generated SQL (e.g. `users_my_policy_select_0_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
 
 ### op.create_policy(table_name: str, policy_name: str, cmd: str, expr: str)
 Creates a policy for a table with the given name, definition, policy name, command, and expression

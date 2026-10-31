@@ -302,7 +302,7 @@ class TestPolicy(unittest.TestCase):
         policy.get_sql_policies(table_name="users", name_suffix="1")
         self.assertEqual(len(policy.policy_names), 1)
         self.assertRegex(
-            policy.policy_names[0], r"^users_my_custom_select_policy_1_[0-9a-z]{8}$"
+            policy.policy_names[0], r"^users_my_custom_select_1_[0-9a-z]{8}$"
         )
 
     def test_get_sql_policies_default_policy_name(self):
@@ -310,7 +310,7 @@ class TestPolicy(unittest.TestCase):
         policy.get_sql_policies(table_name="users", name_suffix="0")
         self.assertEqual(len(policy.policy_names), 1)
         self.assertRegex(
-            policy.policy_names[0], r"^users_permissive_select_policy_0_[0-9a-z]{8}$"
+            policy.policy_names[0], r"^users_permissive_select_0_[0-9a-z]{8}$"
         )
 
     def test_policy_name_in_generated_sql(self):
