@@ -95,11 +95,17 @@ class TestAlembicOperations(unittest.TestCase):
         with self.admin_engine.connect() as conn:
             ctx = migration.MigrationContext.configure(conn)
             diffs = autogenerate.compare_metadata(ctx, target_metadata)
+            migration_script = autogenerate.produce_migrations(ctx, target_metadata)
 
         self.assertEqual(
             diffs,
             [],
             f"Expected no spurious diffs after migration, but found: {diffs}",
+        )
+        self.assertTrue(
+            migration_script.upgrade_ops is not None
+            and migration_script.upgrade_ops.is_empty(),
+            "Expected no spurious RLS operations after migration.",
         )
 
 
