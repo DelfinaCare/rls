@@ -17,7 +17,7 @@ def base_wrapper(
     # Register the alembic operations
     from rls import alembic_ops as _  # noqa: F401
 
-    Base.metadata.info.setdefault("rls_policies", dict())
+    Base.metadata.info.setdefault("rls_policies", {})
     # Call the hook for already mapped classes.
     for mapper in Base.registry.mappers:
         base_wrapper_hook(mapper, mapper.class_)

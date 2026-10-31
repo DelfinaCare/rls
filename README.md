@@ -179,7 +179,9 @@ class ExampleContextGetter(ContextGetter):
 session_maker = sessionmaker(
     class_=RlsSession, autoflush=False, autocommit=False, bind=engine
 )
-my_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=ExampleContextGetter())
+my_sessioner = RlsSessioner(
+    sessionmaker=session_maker, context_getter=ExampleContextGetter()
+)
 
 with my_sessioner(account_id=22, provider_id=99) as session:
     res = session.execute(text("SELECT * FROM users")).fetchall()
