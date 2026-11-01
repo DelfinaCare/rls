@@ -321,7 +321,29 @@ class TestRenderCreatePolicy(unittest.TestCase):
         self.assertIn("'pol1'", result)
         self.assertIn("'SELECT'", result)
         self.assertIn("'PERMISSIVE'", result)
+        self.assertIn("allow_bypass_rls=True", result)
         self.assertIn("import typing", ctx.imports)
+
+    def test_preserves_disabled_bypass_rls(self) -> None:
+        ctx = _mock_autogen_context()
+        op = alembic_ops.CreatePolicyOp(
+            table_name="users",
+            policy_name="pol1",
+            definition="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+            allow_bypass_rls=False,
+        )
+
+        result = alembic_ops.render_create_policy(ctx, op)
+
+        self.assertEqual(
+            result,
+            "typing.cast(alembic_ops.RLSOp, op).create_policy("
+            "table_name='users', policy_name='pol1', "
+            "cmd='SELECT', definition='PERMISSIVE', expr='id = 1', "
+            "allow_bypass_rls=False)",
+        )
 
 
 class TestRenderDropPolicy(unittest.TestCase):

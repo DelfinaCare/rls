@@ -386,7 +386,8 @@ def render_create_policy(autogen_context, op):
     return (
         f"typing.cast(alembic_ops.RLSOp, op).create_policy("
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r}, "
+        f"allow_bypass_rls={op.allow_bypass_rls!r})"
     )
 
 
