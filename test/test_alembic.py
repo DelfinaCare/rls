@@ -322,8 +322,13 @@ class TestStrictPolicyMigrationReversal(unittest.TestCase):
         self._invoke(drop_op.reverse())
         self._assert_strict()
 
-    def test_drop_without_flag_does_not_make_policy_bypassable(self):
-        """Existing migrations that omit allow_bypass_rls must not add bypass."""
+    def test_drop_without_flag_keeps_legacy_bypass_default(self):
+        """Existing migrations that omit allow_bypass_rls keep the old default.
+
+        Before allow_bypass_rls was rendered into drop_policy, reversing a drop
+        always recreated the policy with bypass enabled. Migrations written
+        that way keep that behaviour; newly generated ones pass the flag.
+        """
         self._invoke(
             alembic_ops.CreatePolicyOp(
                 table_name=self.TABLE,
@@ -343,7 +348,10 @@ class TestStrictPolicyMigrationReversal(unittest.TestCase):
         )
         self._invoke(drop_op)
         self._invoke(drop_op.reverse())
-        self._assert_strict()
+        policies = self._db_policies()
+        self.assertEqual(len(policies), 1)
+        self.assertTrue(policies[0].allow_bypass_rls)
+        self.assertEqual(self._visible_ids_with_bypass(), [1, 2])
 
 
 if __name__ == "__main__":

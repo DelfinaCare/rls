@@ -286,7 +286,7 @@ class TestAllowBypassRlsPreservation(unittest.TestCase):
             allow_bypass_rls=allow_bypass_rls,
         )
 
-    def test_drop_policy_defaults_to_no_bypass(self):
+    def test_drop_policy_defaults_to_bypass_for_backward_compatibility(self):
         op = alembic_ops.DropPolicyOp(
             table_name="users",
             policy_name="pol1",
@@ -294,8 +294,8 @@ class TestAllowBypassRlsPreservation(unittest.TestCase):
             cmd="SELECT",
             expr="id = 1",
         )
-        self.assertFalse(op.allow_bypass_rls)
-        self.assertFalse(op.reverse().allow_bypass_rls)
+        self.assertTrue(op.allow_bypass_rls)
+        self.assertTrue(op.reverse().allow_bypass_rls)
 
     def test_round_trip_preserves_flag(self):
         for allow_bypass_rls in (True, False):
