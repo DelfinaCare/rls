@@ -273,6 +273,98 @@ class TestDropPolicyOp(unittest.TestCase):
         self.assertEqual(rev.expr, "id = 1")
 
 
+class TestAllowBypassRlsPreservation(unittest.TestCase):
+    """Regression tests: allow_bypass_rls must survive op reversal and rendering."""
+
+    def _create_op(self, allow_bypass_rls):
+        return alembic_ops.CreatePolicyOp(
+            table_name="users",
+            policy_name="pol1",
+            definition="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+            allow_bypass_rls=allow_bypass_rls,
+        )
+
+    def test_drop_policy_defaults_to_no_bypass(self):
+        op = alembic_ops.DropPolicyOp(
+            table_name="users",
+            policy_name="pol1",
+            definition="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+        )
+        self.assertFalse(op.allow_bypass_rls)
+        self.assertFalse(op.reverse().allow_bypass_rls)
+
+    def test_round_trip_preserves_flag(self):
+        for allow_bypass_rls in (True, False):
+            with self.subTest(allow_bypass_rls=allow_bypass_rls):
+                create_op = self._create_op(allow_bypass_rls)
+                drop_op = create_op.reverse()
+                self.assertEqual(drop_op.allow_bypass_rls, allow_bypass_rls)
+                recreated = drop_op.reverse()
+                self.assertEqual(recreated.allow_bypass_rls, allow_bypass_rls)
+
+    def test_reversed_strict_policy_sql_has_no_bypass(self):
+        recreated = self._create_op(False).reverse().reverse()
+        ops = _mock_operations()
+        alembic_ops.create_policy(ops, recreated)
+        sql_text = str(ops.execute.call_args[0][0])
+        self.assertNotIn("rls.bypass_rls", sql_text)
+
+    def test_drop_policy_classmethod_accepts_flag(self):
+        ops = _mock_operations()
+        alembic_ops.DropPolicyOp.drop_policy(
+            ops,
+            table_name="users",
+            policy_name="pol1",
+            definition="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+            allow_bypass_rls=False,
+        )
+        self.assertFalse(ops.invoke.call_args[0][0].allow_bypass_rls)
+
+    def test_renderers_emit_flag(self):
+        for allow_bypass_rls in (True, False):
+            with self.subTest(allow_bypass_rls=allow_bypass_rls):
+                create_op = self._create_op(allow_bypass_rls)
+                expected = f"allow_bypass_rls={allow_bypass_rls!r}"
+                self.assertIn(
+                    expected,
+                    alembic_ops.render_create_policy(
+                        _mock_autogen_context(), create_op
+                    ),
+                )
+                self.assertIn(
+                    expected,
+                    alembic_ops.render_drop_policy(
+                        _mock_autogen_context(), create_op.reverse()
+                    ),
+                )
+
+    def test_check_rls_policies_detects_bypass(self):
+        bypass_expr = (
+            "((id = 1) OR ((NULLIF(current_setting('rls.bypass_rls'::text, true),"
+            " ''::text))::boolean = true))"
+        )
+        cases = [
+            ("id = 1", None, False),
+            (None, None, False),
+            (bypass_expr, None, True),
+            (None, bypass_expr, True),
+        ]
+        for qual, with_check, expected in cases:
+            with self.subTest(qual=qual, with_check=with_check):
+                conn = mock.MagicMock()
+                conn.execute.return_value.fetchall.return_value = [
+                    ("pol1", "PERMISSIVE", "SELECT", ["public"], qual, with_check)
+                ]
+                policies = alembic_ops.check_rls_policies(conn, None, "users")
+                self.assertEqual(policies[0].allow_bypass_rls, expected)
+
+
 class TestCreatePolicyImpl(unittest.TestCase):
     def test_executes_generated_sql(self):
         ops = _mock_operations()
@@ -484,6 +576,60 @@ class TestCompareTableLevel(unittest.TestCase):
         ]
         self.assertEqual(len(drop_ops), 1)
         self.assertEqual(drop_ops[0].policy_name, "orphan_policy")
+
+    def test_drop_op_preserves_db_bypass_setting(self):
+        """Dropped DB policies must carry the DB-detected bypass setting."""
+        for allow_bypass_rls in (True, False):
+            with self.subTest(allow_bypass_rls=allow_bypass_rls):
+                db_policy = schemas.Policy(
+                    definition="PERMISSIVE",
+                    cmd=schemas.Command.select,
+                    custom_policy_name="orphan_policy",
+                    allow_bypass_rls=allow_bypass_rls,
+                )
+                db_policy.expression = "true"
+                modify_ops = self._build_context(
+                    table_exists=True,
+                    rls_enabled=True,
+                    db_policies=[db_policy],
+                    meta_policies={"users": []},
+                )
+                drop_ops = [
+                    op
+                    for op in modify_ops.ops
+                    if isinstance(op, alembic_ops.DropPolicyOp)
+                ]
+                self.assertEqual(drop_ops[0].allow_bypass_rls, allow_bypass_rls)
+                self.assertEqual(
+                    drop_ops[0].reverse().allow_bypass_rls, allow_bypass_rls
+                )
+
+    def test_changed_strict_policy_ops_stay_strict(self):
+        """Recreating a changed strict policy must not make it bypassable."""
+        policy = _make_boolean_policy(allow_bypass_rls=False)
+        policy.get_sql_policies(table_name="users")
+        db_policy = schemas.Policy(
+            definition="PERMISSIVE",
+            cmd=schemas.Command.select,
+            custom_policy_name=policy.policy_names[0],
+            allow_bypass_rls=False,
+        )
+        db_policy.expression = "totally_different_expression"
+        modify_ops = self._build_context(
+            table_exists=True,
+            rls_enabled=True,
+            db_policies=[db_policy],
+            meta_policies={"users": [policy]},
+        )
+        policy_ops = [
+            op
+            for op in modify_ops.ops
+            if isinstance(op, (alembic_ops.DropPolicyOp, alembic_ops.CreatePolicyOp))
+        ]
+        self.assertEqual(len(policy_ops), 2)
+        for op in policy_ops:
+            self.assertFalse(op.allow_bypass_rls)
+            self.assertFalse(op.reverse().allow_bypass_rls)
 
     def test_recreates_policy_when_changed(self):
         """A changed policy should be dropped then re-created."""

@@ -92,6 +92,7 @@ class RLSOp(typing.Protocol):
         definition: str,
         cmd: str,
         expr: str,
+        allow_bypass_rls: bool = False,
         **kw: typing.Any,
     ) -> None: ...
 
@@ -112,6 +113,9 @@ def render_enable_rls(autogen_context, op):
 def render_disable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
     return f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r})"
+
+
+_BYPASS_RLS_SETTING = "rls.bypass_rls"
 
 
 def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
@@ -141,6 +145,10 @@ def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
         policy.expression = policy_data.get("with_check", "") or policy_data.get(
             "qual", ""
         )
+        # The bypass clause, if any, is already embedded in the stored
+        # expression. Only report bypass when it is positively detected so
+        # that a strict policy is never treated as bypassable.
+        policy.allow_bypass_rls = _BYPASS_RLS_SETTING in (policy.expression or "")
 
         policies.append(policy)
 
@@ -253,6 +261,7 @@ def compare_table_level(
                             policy_name=matched_policy.custom_policy_name,
                             cmd=current_cmd,
                             expr=matched_policy.expression,
+                            allow_bypass_rls=matched_policy.allow_bypass_rls,
                         )
                     )
                     modify_ops.ops.append(
@@ -281,6 +290,7 @@ def compare_table_level(
                     policy_name=policy_db.custom_policy_name,
                     cmd=policy_db.cmd.value,
                     expr=policy_db.expression,
+                    allow_bypass_rls=policy_db.allow_bypass_rls,
                 )
             )
 
@@ -313,19 +323,30 @@ class CreatePolicyOp(alembic_operations.MigrateOperation):
             definition=self.definition,
             cmd=self.cmd,
             expr=self.expr,
+            allow_bypass_rls=self.allow_bypass_rls,
         )
 
 
 @alembic_operations.Operations.register_operation("drop_policy")
 class DropPolicyOp(alembic_operations.MigrateOperation):
-    """Operation to drop an RLS policy."""
+    """Operation to drop an RLS policy.
 
-    def __init__(self, table_name, policy_name, definition, cmd, expr):
+    ``allow_bypass_rls`` records whether the dropped policy honoured the
+    ``rls.bypass_rls`` session variable, so that :meth:`reverse` (used for
+    downgrades) recreates it with the same behaviour. It defaults to ``False``
+    so that a policy is never made bypassable when its original setting is
+    unknown.
+    """
+
+    def __init__(
+        self, table_name, policy_name, definition, cmd, expr, allow_bypass_rls=False
+    ):
         self.table_name = table_name
         self.definition = definition
         self.cmd = cmd
         self.expr = expr
         self.policy_name = policy_name
+        self.allow_bypass_rls = allow_bypass_rls
 
     @classmethod
     def drop_policy(
@@ -342,13 +363,13 @@ class DropPolicyOp(alembic_operations.MigrateOperation):
         return operations.invoke(op)
 
     def reverse(self):
-        # You need the original policy metadata to recreate it, so this part is context-dependent.
         return CreatePolicyOp(
             table_name=self.table_name,
             policy_name=self.policy_name,
             definition=self.definition,
             cmd=self.cmd,
             expr=self.expr,
+            allow_bypass_rls=self.allow_bypass_rls,
         )
 
 
@@ -386,7 +407,8 @@ def render_create_policy(autogen_context, op):
     return (
         f"typing.cast(alembic_ops.RLSOp, op).create_policy("
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r}, "
+        f"allow_bypass_rls={op.allow_bypass_rls!r})"
     )
 
 
@@ -396,5 +418,6 @@ def render_drop_policy(autogen_context, op):
     return (
         f"typing.cast(alembic_ops.RLSOp, op).drop_policy("
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r}, "
+        f"allow_bypass_rls={op.allow_bypass_rls!r})"
     )
