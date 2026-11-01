@@ -346,6 +346,24 @@ class TestPolicy(unittest.TestCase):
         self.assertLessEqual(len(name.encode("utf-8")), 63)
         self.assertRegex(name, r"_[0-9a-z]{8}$")
 
+    def test_hashed_policy_name_ignores_whitespace_changes(self):
+        compact = "CREATE POLICY p ON t AS PERMISSIVE FOR SELECT USING (true)"
+        reformatted = """
+            CREATE POLICY p ON t
+              AS PERMISSIVE\tFOR SELECT
+            USING (true)
+        """
+        self.assertEqual(
+            _sql_gen.hashed_policy_name("p", compact),
+            _sql_gen.hashed_policy_name("p", reformatted),
+        )
+
+    def test_hashed_policy_name_changes_with_content(self):
+        self.assertNotEqual(
+            _sql_gen.hashed_policy_name("p", "USING (true)"),
+            _sql_gen.hashed_policy_name("p", "USING (false)"),
+        )
+
     def test_policy_names_reset_on_reinvocation(self):
         policy = _make_boolean_policy()
         policy.get_sql_policies(table_name="users", name_suffix="0")

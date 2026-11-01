@@ -18,11 +18,15 @@ def hashed_policy_name(base_name: str, policy_sql: str) -> str:
     SQLAlchemy.  Embedding a hash of the generated SQL in the policy name
     lets us detect changes by comparing names alone.
 
+    Whitespace in ``policy_sql`` is normalized before hashing, so formatting
+    changes to the generated SQL do not change the policy name.
+
     The base name is truncated if needed so that the resulting identifier
     fits within Postgres' identifier length limit (otherwise Postgres would
     truncate the hash away).
     """
-    value = int.from_bytes(hashlib.sha256(policy_sql.encode("utf-8")).digest())
+    normalized_sql = " ".join(policy_sql.split())
+    value = int.from_bytes(hashlib.sha256(normalized_sql.encode("utf-8")).digest())
     base_len = len(_POLICY_HASH_ALPHABET)
     chars = []
     for _ in range(_POLICY_HASH_LENGTH):
