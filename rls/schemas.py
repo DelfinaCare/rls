@@ -147,15 +147,28 @@ class Policy(pydantic.BaseModel):
             cmd_value = cmd.value
 
             if self.custom_policy_name is not None:
-                policy_name = (
+                base_policy_name = (
                     f"{table_name}_{self.custom_policy_name}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
+                    f"_{cmd_value}_{name_suffix}".lower()
                 )
             else:
-                policy_name = (
-                    f"{table_name}_{self.definition}"
-                    f"_{cmd_value}_policy_{name_suffix}".lower()
+                base_policy_name = (
+                    f"{table_name}_{self.definition}_{cmd_value}_{name_suffix}".lower()
                 )
+
+            # Hash the SQL generated with the base name, then regenerate the
+            # SQL using the hashed name so the name reflects the policy body.
+            base_policy = _sql_gen.generate_rls_policy(
+                cmd=cmd_value,
+                definition=self.definition,
+                policy_name=base_policy_name,
+                table_name=table_name,
+                expr=self._expr,
+                allow_bypass_rls=self.allow_bypass_rls,
+            )
+            policy_name = _sql_gen.hashed_policy_name(
+                base_policy_name, str(base_policy)
+            )
 
             self._policy_names.append(policy_name)
 

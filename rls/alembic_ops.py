@@ -212,77 +212,40 @@ def compare_table_level(
     if rls_enabled_db and not rls_enabled_meta:
         modify_ops.ops.append(DisableRlsOp(tablename=tablename, schemaname=schemaname))
 
-    # STEP 5. Compare and manage individual policies (add, remove, update)
-    all_metadata_policy_names = []
+    # STEP 5. Compare policies by name. Policy names embed a hash of the
+    # generated policy SQL, so any change to a policy produces a new name.
+    # Postgres rewrites stored policy expressions, so comparing expression
+    # strings directly is unreliable.
+    db_policy_names = {p.custom_policy_name for p in rls_policies_db}
+    all_metadata_policy_names: set[str] = set()
+    create_ops: list[CreatePolicyOp] = []
     for idx, policy_meta in enumerate(rls_policies_meta):
         policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
-        all_metadata_policy_names.extend(policy_meta.policy_names)
+        all_metadata_policy_names.update(policy_meta.policy_names)
         policy_expr = policy_meta.expression
         for ix, single_policy_name in enumerate(policy_meta.policy_names):
+            if single_policy_name in db_policy_names:
+                continue
             if isinstance(policy_meta.cmd, list):
                 current_cmd = _cmd_value(policy_meta.cmd[ix])
             else:
                 current_cmd = _cmd_value(policy_meta.cmd)
-
-            matched_policy = next(
-                (
-                    p
-                    for p in rls_policies_db
-                    if p.custom_policy_name == single_policy_name
-                ),
-                None,
-            )
-            if not matched_policy:
-                # Policy exists in metadata but not in the database, so create it
-                modify_ops.ops.append(
-                    CreatePolicyOp(
-                        table_name=tablename,
-                        definition=policy_meta.definition,
-                        policy_name=single_policy_name,
-                        cmd=current_cmd,
-                        expr=policy_expr,
-                        allow_bypass_rls=policy_meta.allow_bypass_rls,
-                    )
+            # Policy exists in metadata but not in the database, so create it
+            create_ops.append(
+                CreatePolicyOp(
+                    table_name=tablename,
+                    definition=policy_meta.definition,
+                    policy_name=single_policy_name,
+                    cmd=current_cmd,
+                    expr=policy_expr,
+                    allow_bypass_rls=policy_meta.allow_bypass_rls,
                 )
+            )
 
-            else:
-                # Policy exists in both metadata and database, so check if it needs to be updated
-                # Notice: Matched policy is db policy
-                tmp_policy_meta = policy_meta.model_copy()
-                tmp_policy_meta.cmd = schemas.Command(current_cmd)
-                if not schemas.policy_changed_checker(
-                    db_policy=matched_policy, metadata_policy=tmp_policy_meta
-                ):
-                    # Policy has changed, so drop and recreate it
-                    modify_ops.ops.append(
-                        DropPolicyOp(
-                            table_name=tablename,
-                            definition=matched_policy.definition,
-                            policy_name=matched_policy.custom_policy_name,
-                            cmd=current_cmd,
-                            expr=matched_policy.expression,
-                            allow_bypass_rls=matched_policy.allow_bypass_rls,
-                        )
-                    )
-                    modify_ops.ops.append(
-                        CreatePolicyOp(
-                            table_name=tablename,
-                            definition=policy_meta.definition,
-                            policy_name=single_policy_name,
-                            cmd=current_cmd,
-                            expr=policy_expr,
-                            allow_bypass_rls=policy_meta.allow_bypass_rls,
-                        )
-                    )
-
-    # Step 6. Check if there are any policies in the database that are not in the metadata
+    # Step 6. Drop policies in the database that are not in the metadata
+    # (including outdated versions of changed policies) before creating new ones.
     for policy_db in rls_policies_db:
-        matched_policy = next(
-            (p for p in all_metadata_policy_names if p == policy_db.custom_policy_name),
-            None,
-        )
-        if not matched_policy:
-            # Policy exists in the database but not in metadata, so drop it
+        if policy_db.custom_policy_name not in all_metadata_policy_names:
             modify_ops.ops.append(
                 DropPolicyOp(
                     table_name=tablename,
@@ -293,6 +256,7 @@ def compare_table_level(
                     allow_bypass_rls=policy_db.allow_bypass_rls,
                 )
             )
+    modify_ops.ops.extend(create_ops)
 
 
 @alembic_operations.Operations.register_operation("create_policy")
