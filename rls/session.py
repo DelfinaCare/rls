@@ -72,20 +72,28 @@ class _RlsSessionMixin:
         self._rls_context_keys: list[str] = (
             list(type(self._context).model_fields.keys()) if self._context else []
         )
-        self._rls_set_template = _set_statement_template(self._rls_context_keys)
+        template = _set_statement_template(self._rls_context_keys)
+        # Wrap the template in SQLAlchemy's lambda statement infrastructure so
+        # the statement construction and its compilation are cached; only the
+        # bound values need to be supplied at execution time.
+        self._rls_set_statement = sqlalchemy.lambda_stmt(lambda: template)
 
-    def _get_set_statement(self) -> sqlalchemy.Executable | None:
+    def _get_set_statement(
+        self,
+    ) -> tuple[sqlalchemy.Executable, dict[str, str]] | None:
         """
-        Returns the SQL statement to set all RLS config values.
+        Returns the SQL statement to set all RLS config values, along with the
+        bound parameter values to execute it with.
 
-        The SQL template was pre-computed at init time; here we only substitute
-        the current field values.  None values are stored as an empty string so
-        that the RLS policy expressions (which wrap current_setting() with
-        NULLIF(..., '')) treat them as NULL and filter out all rows.
+        The statement was pre-compiled into a SQLAlchemy lambda statement at
+        init time; here we only compute the current field values.  None values
+        are stored as an empty string so that the RLS policy expressions (which
+        wrap current_setting() with NULLIF(..., '')) treat them as NULL and
+        filter out all rows.
         """
         if self._rls_bypass_depth > 0:
             if self._rls_dirty:
-                return sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
+                return sqlalchemy.text("SET LOCAL rls.bypass_rls = true;"), {}
             return None
         if not self._rls_dirty:
             if self._rls_context_is_immutable:
@@ -95,10 +103,9 @@ class _RlsSessionMixin:
         self._rls_last_set_context_snapshot = (
             self._context.model_copy(deep=True) if self._context else None
         )
-        value_params = _context_to_value_params(
+        return self._rls_set_statement, _context_to_value_params(
             self._rls_last_set_context_snapshot, self._rls_context_keys
         )
-        return self._rls_set_template.params(**value_params)
 
 
 class RlsSessionTransaction:
@@ -299,8 +306,8 @@ class AsyncBypassRLSContext:
 class RlsSession(_RlsSessionMixin, orm.Session):
     def _execute_set_statements(self):
         """Executes the RLS SET statement if present."""
-        if (stmt := self._get_set_statement()) is not None:
-            super().execute(stmt)
+        if (set_statement := self._get_set_statement()) is not None:
+            super().execute(*set_statement)
             self._rls_dirty = False
 
     def begin(self, nested: bool = False) -> "RlsSessionTransaction":  # type: ignore[override]
@@ -333,8 +340,8 @@ class RlsSession(_RlsSessionMixin, orm.Session):
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):
         """Executes the RLS SET statement if present."""
-        if (stmt := self._get_set_statement()) is not None:
-            await super().execute(stmt)
+        if (set_statement := self._get_set_statement()) is not None:
+            await super().execute(*set_statement)
             self._rls_dirty = False
 
     def begin(self) -> RlsAsyncSessionTransaction:  # type: ignore[override]
