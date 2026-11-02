@@ -1,6 +1,7 @@
 import os
 import typing
 import unittest
+from unittest import mock
 
 import sqlalchemy
 import testing.postgresql
@@ -249,6 +250,35 @@ class TestAlembicOperations(unittest.TestCase):
         self._autogenerate_and_upgrade("force rls")
         self.assertEqual(self._rls_flags("users"), (True, True))
         self.assertEqual(self._pending_policy_ops(), ([], []))
+
+    def _pending_enable_ops(self) -> list[alembic_ops.EnableRlsOp]:
+        with self.admin_engine.connect() as conn:
+            ctx = migration.MigrationContext.configure(conn)
+            script = autogenerate.produce_migrations(ctx, models.Base.metadata)
+        assert script.upgrade_ops is not None
+        return [
+            op
+            for table_ops in script.upgrade_ops.ops
+            for op in getattr(table_ops, "ops", [])
+            if isinstance(op, alembic_ops.EnableRlsOp)
+        ]
+
+    def test_enable_only_rls_mode(self):
+        """Tables in ``enable`` mode have RLS enabled but not forced."""
+        self._autogenerate_and_upgrade("ensure policies exist")
+        self.assertEqual(self._rls_flags("users"), (True, True))
+        try:
+            with mock.patch.object(
+                models.User, "__rls_mode__", policy.RlsMode.enable, create=True
+            ):
+                self._autogenerate_and_upgrade("enable only rls")
+                self.assertEqual(self._rls_flags("users"), (True, False))
+                self.assertEqual(self._rls_flags("items"), (True, True))
+                self.assertEqual(self._pending_enable_ops(), [])
+        finally:
+            self._autogenerate_and_upgrade("restore forced rls")
+        self.assertEqual(self._rls_flags("users"), (True, True))
+        self.assertEqual(self._pending_enable_ops(), [])
 
     def test_schema_qualified_table(self):
         """Autogenerate creates, applies and then keeps policies on a table in a

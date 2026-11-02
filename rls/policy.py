@@ -31,6 +31,20 @@ class PolicyType(str, enum.Enum):
     restrictive = "RESTRICTIVE"
 
 
+class RlsMode(str, enum.Enum):
+    """How row level security is turned on for a table.
+
+    ``enable`` only enables RLS, so the table owner bypasses the policies.
+    ``enable_and_force`` also forces RLS, so the table owner is subject to them.
+    """
+
+    enable = "ENABLE"
+    enable_and_force = "ENABLE_AND_FORCE"
+
+
+DEFAULT_RLS_MODE = RlsMode.enable_and_force
+
+
 class ConditionArg(pydantic.BaseModel):
     comparator_name: str
     type: type[sql.sqltypes.TypeEngine]

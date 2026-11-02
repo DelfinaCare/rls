@@ -95,6 +95,42 @@ class TestCreatePolicies(unittest.TestCase):
         self.assertEqual(len(enable_rls_calls), 1)
         self.assertIn("table_with_policies", enable_rls_calls[0])
 
+    def _sample_policy(self) -> policy.Policy:
+        return policy.Policy.from_sqla(
+            condition_args=[
+                policy.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=policy.Command.select,
+            expr=lambda x: sqlalchemy.sql.column("id") == x,
+        )
+
+    def _executed_sqls(self, Base) -> list[str]:
+        conn = self._make_connection()
+        create_policies.create_policies(Base, conn)
+        return [str(call.args[0]) for call in conn.execute.call_args_list]
+
+    def test_forces_rls_by_default(self):
+        Base = _make_base_with_policies({"my_table": [self._sample_policy()]})
+        executed_sqls = self._executed_sqls(Base)
+        self.assertIn("ALTER TABLE my_table FORCE ROW LEVEL SECURITY;", executed_sqls)
+
+    def test_enable_mode_does_not_force_rls(self):
+        Base = _make_base_with_policies(
+            {"my_table": [self._sample_policy()], "forced": [self._sample_policy()]}
+        )
+        Base.metadata.info["rls_modes"] = {
+            "my_table": policy.RlsMode.enable,
+            "forced": policy.RlsMode.enable_and_force,
+        }
+        executed_sqls = self._executed_sqls(Base)
+        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertNotIn(
+            "ALTER TABLE my_table FORCE ROW LEVEL SECURITY;", executed_sqls
+        )
+        self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY;", executed_sqls)
+
 
 if __name__ == "__main__":
     unittest.main()

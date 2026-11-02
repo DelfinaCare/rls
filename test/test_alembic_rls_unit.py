@@ -143,6 +143,18 @@ class TestEnableRlsImpl(unittest.TestCase):
             ],
         )
 
+    def test_without_force(self):
+        ops = _mock_operations()
+        operation = alembic_ops.EnableRlsOp("users", force=False)
+        alembic_ops.enable_rls(ops, operation)
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call("ALTER TABLE users ENABLE ROW LEVEL SECURITY"),
+                mock.call("ALTER TABLE users NO FORCE ROW LEVEL SECURITY"),
+            ],
+        )
+
 
 class TestDisableRlsImpl(unittest.TestCase):
     def test_without_schema(self):
@@ -185,7 +197,17 @@ class TestRenderEnableRls(unittest.TestCase):
         result = alembic_ops.render_enable_rls(ctx, op)
         self.assertIn("enable_rls", result)
         self.assertIn("'users'", result)
+        self.assertNotIn("force", result)
         self.assertIn("import typing", ctx.imports)
+
+    def test_output_without_force(self):
+        ctx = _mock_autogen_context()
+        op = alembic_ops.EnableRlsOp("users", force=False)
+        result = alembic_ops.render_enable_rls(ctx, op)
+        self.assertEqual(
+            result,
+            "typing.cast(alembic_ops.RLSOp, op).enable_rls('users', force=False)",
+        )
 
 
 class TestRenderDisableRls(unittest.TestCase):
@@ -385,6 +407,7 @@ class TestCompareTableLevel(unittest.TestCase):
         schemaname=None,
         rls_forced=True,
         metadata_table_present=True,
+        meta_modes=None,
     ):
         """Set up mocks for one call to compare_table_level."""
         if db_policies is None:
@@ -399,6 +422,8 @@ class TestCompareTableLevel(unittest.TestCase):
         # Mock metadata_table
         metadata_table = mock.MagicMock()
         metadata_table.metadata.info = {"rls_policies": meta_policies}
+        if meta_modes is not None:
+            metadata_table.metadata.info["rls_modes"] = meta_modes
 
         # Mock modify_ops (operations list)
         modify_ops = mock.MagicMock()
@@ -657,6 +682,62 @@ class TestCompareTableLevel(unittest.TestCase):
         )
         self.assertEqual(len(modify_ops.ops), 1)
         self.assertIsInstance(modify_ops.ops[0], alembic_ops.EnableRlsOp)
+        self.assertTrue(modify_ops.ops[0].force)
+
+    def _matching_db_policy(self, meta_policy):
+        return policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
+            expr=meta_policy.expr,
+            policy_type=meta_policy.policy_type,
+        )
+
+    def test_enable_mode_enables_without_force(self):
+        """Tables in ``enable`` mode are enabled without FORCE."""
+        modify_ops = self._build_context(
+            rls_enabled=False,
+            meta_policies={"users": [_sample_policy()]},
+            meta_modes={"users": policy.RlsMode.enable},
+        )
+        enable_ops = [
+            op for op in modify_ops.ops if isinstance(op, alembic_ops.EnableRlsOp)
+        ]
+        self.assertEqual(len(enable_ops), 1)
+        self.assertFalse(enable_ops[0].force)
+
+    def test_enable_mode_unforces_forced_table(self):
+        """Forced tables switched to ``enable`` mode are re-enabled without FORCE."""
+        meta_policy = _sample_policy()
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            rls_forced=True,
+            db_policies=[self._matching_db_policy(meta_policy)],
+            meta_policies={"users": [meta_policy]},
+            meta_modes={"users": policy.RlsMode.enable},
+        )
+        self.assertEqual(len(modify_ops.ops), 1)
+        self.assertIsInstance(modify_ops.ops[0], alembic_ops.EnableRlsOp)
+        self.assertFalse(modify_ops.ops[0].force)
+
+    def test_enable_mode_no_ops_when_not_forced(self):
+        meta_policy = _sample_policy()
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            rls_forced=False,
+            db_policies=[self._matching_db_policy(meta_policy)],
+            meta_policies={"users": [meta_policy]},
+            meta_modes={"users": "ENABLE"},
+        )
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_enable_and_force_mode_explicit(self):
+        modify_ops = self._build_context(
+            rls_enabled=False,
+            meta_policies={"users": [_sample_policy()]},
+            meta_modes={"users": policy.RlsMode.enable_and_force},
+        )
+        self.assertIsInstance(modify_ops.ops[0], alembic_ops.EnableRlsOp)
+        self.assertTrue(modify_ops.ops[0].force)
 
     def test_schema_qualified_table_matches_metadata(self):
         """Policies registered under ``schema.table`` are found for that table."""

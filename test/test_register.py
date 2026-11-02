@@ -95,6 +95,55 @@ class TestRegister(unittest.TestCase):
             ["defined_before", "defined_after"],
         )
 
+    def test_registers_rls_mode(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class DefaultMode(Base):
+            __tablename__ = "default_mode"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = self.sample_policies
+
+        class EnableMode(Base):
+            __tablename__ = "enable_mode"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = self.sample_policies
+            __rls_mode__ = policy.RlsMode.enable
+
+        class EnableStringMode(Base):
+            __tablename__ = "enable_string_mode"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = self.sample_policies
+            __rls_mode__ = "ENABLE"
+
+        self.assertIn(DefaultMode.__tablename__, Base.metadata.tables)
+        self.assertIn(EnableMode.__tablename__, Base.metadata.tables)
+        self.assertIn(EnableStringMode.__tablename__, Base.metadata.tables)
+        self.assertEqual(
+            Base.metadata.info["rls_modes"],
+            {
+                "default_mode": policy.RlsMode.enable_and_force,
+                "enable_mode": policy.RlsMode.enable,
+                "enable_string_mode": policy.RlsMode.enable,
+            },
+        )
+
+    def test_invalid_rls_mode_raises(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        with self.assertRaises(ValueError):
+
+            class _InvalidMode(Base):
+                __tablename__ = "invalid_mode"
+                id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+                __rls_policies__ = self.sample_policies
+                __rls_mode__ = "CLEARLY_INVALID_MODE"
+
 
 if __name__ == "__main__":
     unittest.main()

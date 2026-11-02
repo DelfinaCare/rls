@@ -69,6 +69,28 @@ class Item(Base):
     ]
 ```
 
+#### RLS mode
+
+By default, row level security is both enabled and forced on every table with policies (`ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY`), so the table owner is also subject to the policies. Set `__rls_mode__` on a model to choose the mode per table:
+
+```python
+from rls import policy
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    __rls_policies__ = [...]
+    __rls_mode__ = policy.RlsMode.enable  # or "ENABLE"
+```
+
+| Value | Effect |
+|---|---|
+| `RlsMode.enable_and_force` (`"ENABLE_AND_FORCE"`, default) | RLS is enabled and forced; the table owner is subject to the policies |
+| `RlsMode.enable` (`"ENABLE"`) | RLS is enabled but not forced; the table owner bypasses the policies |
+
+Changing the mode of an existing table is picked up by alembic autogenerate.
+
 #### Policy.from_sqla
 
 `Policy.from_sqla` compiles a SQLAlchemy expression into a single policy:
