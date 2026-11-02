@@ -20,8 +20,12 @@ register.base_wrapper(Base)
 class User(sa_asyncio.AsyncAttrs, Base):
     __tablename__ = "users"
 
-    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
-    username = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
+    id: orm.Mapped[int] = orm.mapped_column(
+        sqlalchemy.Integer, primary_key=True, index=True
+    )
+    username: orm.Mapped[str | None] = orm.mapped_column(
+        sqlalchemy.String, unique=True, index=True
+    )
 
     __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
         policy.Policy.from_sqla(
@@ -39,14 +43,16 @@ class User(sa_asyncio.AsyncAttrs, Base):
 class Item(Base):
     __tablename__ = "items"
 
-    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
-    title = sqlalchemy.Column(sqlalchemy.String, index=True)
-    description = sqlalchemy.Column(sqlalchemy.String)
-    owner_id = sqlalchemy.Column(
+    id: orm.Mapped[int] = orm.mapped_column(
+        sqlalchemy.Integer, primary_key=True, index=True
+    )
+    title: orm.Mapped[str | None] = orm.mapped_column(sqlalchemy.String, index=True)
+    description: orm.Mapped[str | None] = orm.mapped_column(sqlalchemy.String)
+    owner_id: orm.Mapped[int | None] = orm.mapped_column(
         sqlalchemy.Integer, sqlalchemy.ForeignKey("users.id", ondelete="CASCADE")
     )
 
-    owner = orm.relationship("User")
+    owner: orm.Mapped[User | None] = orm.relationship("User")
 
     __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
         policy.Policy.from_sqla(

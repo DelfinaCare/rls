@@ -1,4 +1,5 @@
 import os
+import typing
 import unittest
 
 import sqlalchemy
@@ -6,10 +7,14 @@ import testing.postgresql
 from alembic import autogenerate
 from alembic import command
 from alembic import config as alembic_config
+from alembic import operations as alembic_operations
+from alembic.operations import ops as alembic_ops_module
 from alembic.runtime import migration
+from sqlalchemy import orm
 
 from rls import alembic_ops
 from rls import policy
+from rls import register
 from test import expectations
 from test import models
 
@@ -214,6 +219,124 @@ class TestAlembicOperations(unittest.TestCase):
         self._autogenerate_and_upgrade("migrate legacy policy names")
         self.assertEqual(self._policy_names("users"), expected_names)
         self.assertEqual(self._pending_policy_ops(), ([], []))
+
+    def _rls_flags(self, tablename: str, schemaname: str = "public") -> tuple:
+        with self.admin_engine.connect() as conn:
+            row = conn.execute(
+                sqlalchemy.text(
+                    "SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = :s AND c.relname = :t"
+                ),
+                {"s": schemaname, "t": tablename},
+            ).one()
+        return tuple(row)
+
+    def test_migration_forces_rls(self):
+        """Migrations enable and force RLS so table owners are also subject to it."""
+        self._autogenerate_and_upgrade("ensure policies exist")
+        for tablename in ("users", "items"):
+            self.assertEqual(self._rls_flags(tablename), (True, True))
+
+    def test_forces_rls_on_tables_enabled_without_force(self):
+        """Tables migrated before FORCE was emitted are forced by the next migration."""
+        self._autogenerate_and_upgrade("ensure policies exist")
+        with self.admin_engine.begin() as conn:
+            conn.execute(
+                sqlalchemy.text("ALTER TABLE users NO FORCE ROW LEVEL SECURITY")
+            )
+        self.assertEqual(self._rls_flags("users"), (True, False))
+        self._autogenerate_and_upgrade("force rls")
+        self.assertEqual(self._rls_flags("users"), (True, True))
+        self.assertEqual(self._pending_policy_ops(), ([], []))
+
+    def test_schema_qualified_table(self):
+        """Autogenerate creates, applies and then keeps policies on a table in a
+        non-default schema."""
+        schema = "rls_schema_test"
+
+        class SchemaBase(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(SchemaBase)
+
+        class Doc(SchemaBase):
+            __tablename__ = "docs"
+            __table_args__ = ({"schema": schema},)
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            owner_id = sqlalchemy.Column(sqlalchemy.Integer)
+            __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
+                policy.Policy.from_sqla(
+                    expr=lambda x: sqlalchemy.sql.column("owner_id") == x,
+                    condition_args=[
+                        policy.ConditionArg(
+                            comparator_name="account_id", type=sqlalchemy.Integer
+                        ),
+                    ],
+                    cmd=policy.Command.all,
+                ),
+            ]
+
+        def include_name(name, type_, parent_names):
+            return type_ != "schema" or name == schema
+
+        def docs_ops() -> list:
+            with self.admin_engine.connect() as conn:
+                ctx = migration.MigrationContext.configure(
+                    conn,
+                    opts={
+                        "include_schemas": True,
+                        "include_name": include_name,
+                        "target_metadata": SchemaBase.metadata,
+                    },
+                )
+                script = autogenerate.produce_migrations(ctx, SchemaBase.metadata)
+            assert script.upgrade_ops is not None
+            return [
+                op
+                for table_ops in script.upgrade_ops.ops
+                if isinstance(table_ops, alembic_ops_module.ModifyTableOps)
+                and table_ops.table_name == "docs"
+                for op in table_ops.ops
+            ]
+
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"CREATE SCHEMA {schema}"))
+            SchemaBase.metadata.create_all(conn)
+        self.addCleanup(self._drop_schema, schema)
+
+        ops = docs_ops()
+        self.assertEqual(
+            [type(op) for op in ops],
+            [alembic_ops.EnableRlsOp, alembic_ops.CreatePolicyOp],
+        )
+        self.assertTrue(all(op.schemaname == schema for op in ops))
+
+        with self.admin_engine.begin() as conn:
+            operations = alembic_operations.Operations(
+                migration.MigrationContext.configure(conn)
+            )
+            for op in ops:
+                operations.invoke(op)
+
+        self.assertEqual(self._rls_flags("docs", schema), (True, True))
+        with self.admin_engine.connect() as conn:
+            names = set(
+                conn.execute(
+                    sqlalchemy.text(
+                        "SELECT policyname FROM pg_policies "
+                        "WHERE schemaname = :s AND tablename = 'docs'"
+                    ),
+                    {"s": schema},
+                ).scalars()
+            )
+        self.assertEqual(names, {Doc.__rls_policies__[0].name})
+        # Once applied, autogenerate must not disable RLS or drop the policy.
+        self.assertEqual(docs_ops(), [])
+
+    def _drop_schema(self, schema: str) -> None:
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"DROP SCHEMA {schema} CASCADE"))
 
 
 if __name__ == "__main__":

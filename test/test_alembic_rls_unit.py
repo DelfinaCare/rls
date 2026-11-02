@@ -123,16 +123,24 @@ class TestEnableRlsImpl(unittest.TestCase):
         ops = _mock_operations()
         operation = alembic_ops.EnableRlsOp("users")
         alembic_ops.enable_rls(ops, operation)
-        ops.execute.assert_called_once_with(
-            "ALTER TABLE users ENABLE ROW LEVEL SECURITY"
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call("ALTER TABLE users ENABLE ROW LEVEL SECURITY"),
+                mock.call("ALTER TABLE users FORCE ROW LEVEL SECURITY"),
+            ],
         )
 
     def test_with_schema(self):
         ops = _mock_operations()
         operation = alembic_ops.EnableRlsOp("users", schemaname="myschema")
         alembic_ops.enable_rls(ops, operation)
-        ops.execute.assert_called_once_with(
-            "ALTER TABLE myschema.users ENABLE ROW LEVEL SECURITY"
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call("ALTER TABLE myschema.users ENABLE ROW LEVEL SECURITY"),
+                mock.call("ALTER TABLE myschema.users FORCE ROW LEVEL SECURITY"),
+            ],
         )
 
 
@@ -141,16 +149,24 @@ class TestDisableRlsImpl(unittest.TestCase):
         ops = _mock_operations()
         operation = alembic_ops.DisableRlsOp("users")
         alembic_ops.disable_rls(ops, operation)
-        ops.execute.assert_called_once_with(
-            "ALTER TABLE users DISABLE ROW LEVEL SECURITY"
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call("ALTER TABLE users NO FORCE ROW LEVEL SECURITY"),
+                mock.call("ALTER TABLE users DISABLE ROW LEVEL SECURITY"),
+            ],
         )
 
     def test_with_schema(self):
         ops = _mock_operations()
         operation = alembic_ops.DisableRlsOp("users", schemaname="myschema")
         alembic_ops.disable_rls(ops, operation)
-        ops.execute.assert_called_once_with(
-            "ALTER TABLE myschema.users DISABLE ROW LEVEL SECURITY"
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call("ALTER TABLE myschema.users NO FORCE ROW LEVEL SECURITY"),
+                mock.call("ALTER TABLE myschema.users DISABLE ROW LEVEL SECURITY"),
+            ],
         )
 
 
@@ -367,6 +383,8 @@ class TestCompareTableLevel(unittest.TestCase):
         meta_policies=None,
         tablename="users",
         schemaname=None,
+        rls_forced=True,
+        metadata_table_present=True,
     ):
         """Set up mocks for one call to compare_table_level."""
         if db_policies is None:
@@ -397,6 +415,7 @@ class TestCompareTableLevel(unittest.TestCase):
             mock.patch.object(
                 alembic_ops, "check_rls_policies", return_value=db_policies
             ),
+            mock.patch.object(alembic_ops, "check_rls_forced", return_value=rls_forced),
         ):
             alembic_ops.compare_table_level(
                 autogen_ctx,
@@ -404,7 +423,7 @@ class TestCompareTableLevel(unittest.TestCase):
                 schemaname,
                 tablename,
                 mock.MagicMock(),  # conn_table
-                metadata_table,
+                metadata_table if metadata_table_present else None,
             )
 
         return modify_ops
@@ -620,6 +639,115 @@ class TestCompareTableLevel(unittest.TestCase):
             op for op in modify_ops.ops if isinstance(op, alembic_ops.DisableRlsOp)
         ]
         self.assertEqual(len(disable_ops), 1)
+
+    def test_enable_rls_when_enabled_but_not_forced(self):
+        """Tables with RLS enabled but not forced get re-enabled (and forced)."""
+        meta_policy = _sample_policy()
+        db_policy = policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
+            expr=meta_policy.expr,
+            policy_type=meta_policy.policy_type,
+        )
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            rls_forced=False,
+            db_policies=[db_policy],
+            meta_policies={"users": [meta_policy]},
+        )
+        self.assertEqual(len(modify_ops.ops), 1)
+        self.assertIsInstance(modify_ops.ops[0], alembic_ops.EnableRlsOp)
+
+    def test_schema_qualified_table_matches_metadata(self):
+        """Policies registered under ``schema.table`` are found for that table."""
+        meta_policy = _sample_policy()
+        db_policy = policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
+            expr=meta_policy.expr,
+            policy_type=meta_policy.policy_type,
+        )
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            db_policies=[db_policy],
+            meta_policies={"myschema.users": [meta_policy]},
+            schemaname="myschema",
+        )
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_schema_qualified_ops_carry_schema(self):
+        """Ops generated for a schema-qualified table carry the schema."""
+        meta_policy = _sample_policy()
+        orphan = policy.Policy(
+            name="orphan_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        modify_ops = self._build_context(
+            rls_enabled=False,
+            meta_policies={"myschema.users": [meta_policy]},
+            schemaname="myschema",
+        )
+        self.assertEqual(
+            [op.schemaname for op in modify_ops.ops], ["myschema", "myschema"]
+        )
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            db_policies=[orphan],
+            meta_policies={"myschema.users": [meta_policy]},
+            schemaname="myschema",
+        )
+        self.assertEqual(
+            [op.schemaname for op in modify_ops.ops], ["myschema", "myschema"]
+        )
+
+    def test_no_ops_for_dropped_table(self):
+        """A table being dropped (no metadata table) produces no RLS ops."""
+        modify_ops = self._build_context(rls_enabled=True, metadata_table_present=False)
+        self.assertEqual(modify_ops.ops, [])
+
+
+class TestSchemaQualifiedPolicyOps(unittest.TestCase):
+    def _create_op(self) -> alembic_ops.CreatePolicyOp:
+        return alembic_ops.CreatePolicyOp(
+            table_name="users",
+            policy_name="pol1",
+            policy_type="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+            schemaname="myschema",
+        )
+
+    def test_create_policy_uses_schema(self):
+        ops = _mock_operations()
+        alembic_ops.create_policy(ops, self._create_op())
+        self.assertIn("ON myschema.users", str(ops.execute.call_args[0][0]))
+
+    def test_drop_policy_uses_schema(self):
+        ops = _mock_operations()
+        alembic_ops.drop_policy(ops, self._create_op().reverse())
+        ops.execute.assert_called_once_with("DROP POLICY pol1 ON myschema.users;")
+
+    def test_reverse_keeps_schema(self):
+        rev = self._create_op().reverse()
+        self.assertEqual(rev.schemaname, "myschema")
+        self.assertEqual(rev.reverse().schemaname, "myschema")
+
+    def test_renderers_include_schema(self):
+        ctx = _mock_autogen_context()
+        create_op = self._create_op()
+        for result in (
+            alembic_ops.render_create_policy(ctx, create_op),
+            alembic_ops.render_drop_policy(ctx, create_op.reverse()),
+            alembic_ops.render_enable_rls(
+                ctx, alembic_ops.EnableRlsOp("users", schemaname="myschema")
+            ),
+            alembic_ops.render_disable_rls(
+                ctx, alembic_ops.DisableRlsOp("users", schemaname="myschema")
+            ),
+        ):
+            self.assertIn("schemaname='myschema'", result)
 
 
 if __name__ == "__main__":
