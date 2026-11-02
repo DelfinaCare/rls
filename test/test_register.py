@@ -1,3 +1,4 @@
+import types
 import typing
 import unittest
 
@@ -143,6 +144,138 @@ class TestRegister(unittest.TestCase):
                 id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
                 __rls_policies__ = self.sample_policies
                 __rls_mode__ = "CLEARLY_INVALID_MODE"
+
+    def _other_policies(self) -> list[policy.Policy]:
+        return [
+            policy.Policy.from_sqla(
+                expr=lambda x: sqlalchemy.sql.column("id") != x,
+                condition_args=[
+                    policy.ConditionArg(
+                        comparator_name="account_id", type=sqlalchemy.Integer
+                    ),
+                ],
+                cmd=policy.Command.select,
+            ),
+        ]
+
+    def test_joined_inheritance_registers_each_table(self) -> None:
+        parent_policies = self.sample_policies
+        child_policies = self._other_policies()
+
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class Parent(Base):
+            __tablename__ = "parent"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            kind = sqlalchemy.Column(sqlalchemy.String)
+            __rls_policies__ = parent_policies
+            __mapper_args__ = types.MappingProxyType(
+                {"polymorphic_on": kind, "polymorphic_identity": "p"}
+            )
+
+        class Child(Parent):
+            __tablename__ = "child"
+            id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("parent.id"), primary_key=True
+            )
+            __rls_policies__ = child_policies
+            __rls_mode__ = policy.RlsMode.enable
+            __mapper_args__ = types.MappingProxyType({"polymorphic_identity": "c"})
+
+        self.assertEqual(
+            Base.metadata.info["rls_policies"],
+            {"parent": parent_policies, "child": child_policies},
+        )
+        self.assertEqual(
+            Base.metadata.info["rls_modes"],
+            {"parent": policy.RlsMode.enable_and_force, "child": policy.RlsMode.enable},
+        )
+
+    def test_inherited_policies_are_not_registered_for_subclass(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class Parent(Base):
+            __tablename__ = "parent"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            kind = sqlalchemy.Column(sqlalchemy.String)
+            __rls_policies__ = self.sample_policies
+            __mapper_args__ = types.MappingProxyType(
+                {"polymorphic_on": kind, "polymorphic_identity": "p"}
+            )
+
+        class JoinedChild(Parent):
+            __tablename__ = "joined_child"
+            id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("parent.id"), primary_key=True
+            )
+            __mapper_args__ = types.MappingProxyType({"polymorphic_identity": "j"})
+
+        class SingleChild(Parent):
+            __mapper_args__ = types.MappingProxyType({"polymorphic_identity": "s"})
+
+        self.assertIn(JoinedChild.__tablename__, Base.metadata.tables)
+        self.assertIsNotNone(SingleChild)
+        self.assertEqual(
+            Base.metadata.info["rls_policies"], {"parent": self.sample_policies}
+        )
+
+    def test_single_table_inheritance_policies_raise(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class Parent(Base):
+            __tablename__ = "parent"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            kind = sqlalchemy.Column(sqlalchemy.String)
+            __rls_policies__ = self.sample_policies
+            __mapper_args__ = types.MappingProxyType(
+                {"polymorphic_on": kind, "polymorphic_identity": "p"}
+            )
+
+        other_policies = self._other_policies()
+        with self.assertRaisesRegex(TypeError, "single-table inheritance"):
+
+            class _SingleChild(Parent):
+                __rls_policies__ = other_policies
+                __mapper_args__ = types.MappingProxyType({"polymorphic_identity": "s"})
+
+        self.assertEqual(
+            Base.metadata.info["rls_policies"], {"parent": self.sample_policies}
+        )
+
+    def test_policies_from_unmapped_mixin_are_registered(self) -> None:
+        sample_policies = self.sample_policies
+
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class RlsMixin:
+            __rls_policies__ = sample_policies
+
+        class First(RlsMixin, Base):
+            __tablename__ = "first"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+
+        class Second(RlsMixin, Base):
+            __tablename__ = "second"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+
+        self.assertIn(First.__tablename__, Base.metadata.tables)
+        self.assertIn(Second.__tablename__, Base.metadata.tables)
+        self.assertEqual(
+            Base.metadata.info["rls_policies"],
+            {"first": sample_policies, "second": sample_policies},
+        )
 
 
 if __name__ == "__main__":

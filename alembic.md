@@ -26,6 +26,10 @@ To create a policy in alembic revision `manually` you have to keep in mind the f
 
 All four operations accept an optional `schemaname` argument for tables outside the default schema. Autogenerate fills it in for schema-qualified tables (e.g. `__table_args__ = {"schema": "myschema"}`).
 
+Table, schema and policy names are passed unquoted and are quoted as needed, so reserved words (e.g. `user`, `order`), mixed-case names and policy names with spaces work as expected.
+
+Autogenerate compares against the policies that exist on a table even when RLS is currently disabled on it, so existing policies are not re-created and stale ones are dropped.
+
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
 
 **Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy definition (e.g. `permissive_account_id_select_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.

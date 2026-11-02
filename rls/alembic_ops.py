@@ -48,9 +48,21 @@ def _qualified_name(tablename: str, schemaname: str | None) -> str:
     return f"{schemaname}.{tablename}" if schemaname is not None else tablename
 
 
+def _ddl_table_name(tablename: str, schemaname: str | None) -> str:
+    """Quote a table name for use in DDL passed to ``operations.execute``.
+
+    Colons are escaped since Alembic wraps string statements in ``text()``.
+    """
+    return _escape_colons(policy.quote_table(tablename, schemaname))
+
+
+def _escape_colons(sql: str) -> str:
+    return sql.replace(":", "\\:")
+
+
 @alembic_operations.Operations.implementation_for(EnableRlsOp)
 def enable_rls(operations, operation):
-    name = _qualified_name(operation.tablename, operation.schemaname)
+    name = _ddl_table_name(operation.tablename, operation.schemaname)
     operations.execute(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY")
     # Table owners bypass RLS unless it is forced.  Migrations usually run as
     # the table owner, which is often the same role the application uses.
@@ -62,7 +74,7 @@ def enable_rls(operations, operation):
 
 @alembic_operations.Operations.implementation_for(DisableRlsOp)
 def disable_rls(operations, operation):
-    name = _qualified_name(operation.tablename, operation.schemaname)
+    name = _ddl_table_name(operation.tablename, operation.schemaname)
     operations.execute(f"ALTER TABLE {name} NO FORCE ROW LEVEL SECURITY")
     operations.execute(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY")
 
@@ -220,7 +232,9 @@ def compare_table_level(
     # STEP 1. check if the table exists
     table_exists = check_table_exists(autogen_context.connection, schemaname, tablename)
 
-    # STEP 2. Retrieve current RLS policies from the database
+    # STEP 2. Retrieve current RLS policies from the database.  Policies are
+    # read even if RLS is disabled on the table, since they still exist and
+    # must not be re-created (or must be dropped if no longer wanted).
     rls_enabled_db = (
         check_rls_enabled(autogen_context.connection, schemaname, tablename)
         if table_exists
@@ -228,7 +242,7 @@ def compare_table_level(
     )
     rls_policies_db = (
         check_rls_policies(autogen_context.connection, schemaname, tablename)
-        if rls_enabled_db
+        if table_exists
         else []
     )
 
@@ -389,14 +403,15 @@ def create_policy(operations, operation):
         policy_type=policy.PolicyType(operation.policy_type),
     )
     operations.execute(
-        p.render_policy(_qualified_name(operation.table_name, operation.schemaname))
+        p.render_policy(operation.table_name, schemaname=operation.schemaname)
     )
 
 
 @alembic_operations.Operations.implementation_for(DropPolicyOp)
 def drop_policy(operations, operation):
-    table_name = _qualified_name(operation.table_name, operation.schemaname)
-    sql = f"DROP POLICY {operation.policy_name} ON {table_name};"
+    table_name = _ddl_table_name(operation.table_name, operation.schemaname)
+    policy_name = _escape_colons(policy.quote_identifier(operation.policy_name))
+    sql = f"DROP POLICY {policy_name} ON {table_name};"
     operations.execute(sql)
 
 

@@ -6,9 +6,14 @@ import typing
 import pydantic
 import sqlalchemy
 from sqlalchemy import sql
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import elements
 
 _CONDITION_ARGS_PREFIX = "rls"
+
+# Used to quote identifiers (reserved words, mixed case, special characters)
+# when building DDL statements.
+_IDENTIFIER_PREPARER = postgresql.dialect().identifier_preparer
 
 # Postgres silently truncates identifiers longer than NAMEDATALEN - 1 bytes.
 _MAX_IDENTIFIER_BYTES = 63
@@ -43,6 +48,19 @@ class RlsMode(str, enum.Enum):
 
 
 DEFAULT_RLS_MODE = RlsMode.enable_and_force
+
+
+def quote_identifier(name: str) -> str:
+    """Quote a Postgres identifier if needed (e.g. reserved words, mixed case)."""
+    return _IDENTIFIER_PREPARER.quote(name)
+
+
+def quote_table(table_name: str, schemaname: str | None = None) -> str:
+    """Return the quoted, optionally schema-qualified, name of a table."""
+    quoted = quote_identifier(table_name)
+    if schemaname is None:
+        return quoted
+    return f"{_IDENTIFIER_PREPARER.quote_schema(schemaname)}.{quoted}"
 
 
 class ConditionArg(pydantic.BaseModel):
@@ -157,35 +175,30 @@ class Policy(pydantic.BaseModel):
             expr=compiled_expr, cmd=cmd, name=hashed_name, policy_type=policy_type
         )
 
-    def render_policy(self, table_name: str) -> sqlalchemy.TextClause:
-        """Generate a SQL CREATE POLICY statement."""
+    def render_policy(
+        self, table_name: str, schemaname: str | None = None
+    ) -> sqlalchemy.TextClause:
+        """Generate a SQL CREATE POLICY statement.
+
+        ``table_name`` and ``schemaname`` are unquoted identifiers; they and the
+        policy name are quoted as needed.
+        """
 
         # See docs here: https://www.postgresql.org/docs/current/sql-createpolicy.html
-        if self.cmd in ["ALL", "SELECT", "DELETE"]:
-            return sqlalchemy.text(f"""
-                    CREATE POLICY {self.name} ON {table_name}
-                    AS {self.policy_type.value}
-                    FOR {self.cmd.value}
-                    USING ({self.expr})
-                    """)
-
-        elif self.cmd == "UPDATE":
+        header = (
+            f"CREATE POLICY {quote_identifier(self.name)}"
+            f" ON {quote_table(table_name, schemaname)}"
+            f" AS {self.policy_type.value} FOR {self.cmd.value}"
+        )
+        if self.cmd in [Command.all, Command.select, Command.delete]:
+            clauses = f"USING ({self.expr})"
+        elif self.cmd == Command.update:
             # UPDATE requires both USING and WITH CHECK
-            return sqlalchemy.text(f"""
-                CREATE POLICY {self.name} ON {table_name}
-                AS {self.policy_type.value}
-                FOR {self.cmd.value}
-                USING ({self.expr})
-                WITH CHECK ({self.expr});
-            """)
-
-        elif self.cmd == "INSERT":
-            return sqlalchemy.text(f"""
-                    CREATE POLICY {self.name} ON {table_name}
-                    AS {self.policy_type.value}
-                    FOR {self.cmd.value}
-                    WITH CHECK ({self.expr})
-                    """)
-
+            clauses = f"USING ({self.expr}) WITH CHECK ({self.expr})"
+        elif self.cmd == Command.insert:
+            clauses = f"WITH CHECK ({self.expr})"
         else:
             raise ValueError(f'Unknown policy command "{self.cmd}"')
+        # Escape colons so that quoted identifiers are not parsed as bind params.
+        header = header.replace(":", "\\:")
+        return sqlalchemy.text(f"{header} {clauses}")

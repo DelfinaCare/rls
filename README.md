@@ -91,6 +91,15 @@ class AuditLog(Base):
 
 Changing the mode of an existing table is picked up by alembic autogenerate.
 
+#### Inheritance
+
+Policies are registered against the table that the declaring model maps to:
+
+- **Joined-table inheritance**: a subclass with its own table may declare its own `__rls_policies__` (and `__rls_mode__`), which apply to the subclass's table. The parent's policies stay on the parent's table. A subclass that does not declare `__rls_policies__` adds no policies to its table.
+- **Single-table inheritance**: subclasses share the parent's table, so declaring `__rls_policies__` on them raises a `TypeError`. Declare the policies on the class that defines the table.
+
+Policies declared on an unmapped mixin apply to every model using the mixin.
+
 #### Policy.from_sqla
 
 `Policy.from_sqla` compiles a SQLAlchemy expression into a single policy:
