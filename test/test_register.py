@@ -4,23 +4,23 @@ import unittest
 import sqlalchemy
 from sqlalchemy import orm
 
+from rls import policy
 from rls import register
-from rls import schemas
 from test import models
 
 
 class TestRegister(unittest.TestCase):
     def setUp(self) -> None:
         self.sample_policies = [
-            schemas.Permissive(
+            policy.Policy.from_sqla(
+                expr=lambda x: sqlalchemy.sql.column("id") == x,
                 condition_args=[
-                    schemas.ConditionArg(
+                    policy.ConditionArg(
                         comparator_name="account_id", type=sqlalchemy.Integer
                     ),
                 ],
-                cmd=[schemas.Command.select],
-                custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
-            )
+                cmd=policy.Command.all,
+            ),
         ]
 
     def test_models_populates_rls_policies(self):

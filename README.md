@@ -24,13 +24,12 @@ class User(Base):
     username = Column(String, unique=True, index=True)
 
     __rls_policies__ = [
-        Permissive(
+        Policy.from_sqla(
+            expr=lambda x: column("id") == x,
             condition_args=[
                 ConditionArg(comparator_name="account_id", type=Integer),
             ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("id") == x,
-            custom_policy_name="equal_to_accountId_policy",
+            cmd=Command.all,
         ),
     ]
 
@@ -46,32 +45,36 @@ class Item(Base):
     owner = relationship("User")
 
     __rls_policies__ = [
-        Permissive(
+        Policy.from_sqla(
+            expr=lambda x: column("owner_id") == x,
             condition_args=[
                 ConditionArg(comparator_name="account_id", type=Integer),
             ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("owner_id") == x,
-            custom_policy_name="equal_to_accountId_policy",
+            cmd=Command.all,
         ),
-        Permissive(
+        Policy.from_sqla(
+            expr=lambda x: column("owner_id") > x,
             condition_args=[
                 ConditionArg(comparator_name="account_id", type=Integer),
             ],
-            cmd=[Command.select],
-            custom_expr=lambda x: column("owner_id") > x,
-            custom_policy_name="greater_than_accountId_policy",
-        ),
-        Permissive(
-            condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
-            ],
-            cmd=[Command.all],
-            custom_expr=lambda x: column("owner_id") <= x,
-            custom_policy_name="smaller_than_or_equal_accountId_policy",
+            cmd=Command.select,
+            name="greater_than_account_id",
         ),
     ]
 ```
+
+#### Policy.from_sqla
+
+`Policy.from_sqla` compiles a SQLAlchemy expression into a single policy:
+
+- `expr`: a lambda returning a SQLAlchemy boolean expression (see [Expressions](#expressions))
+- `condition_args`: the `ConditionArg`s passed to `expr`
+- `cmd`: the `Command` the policy applies to (one policy per command)
+- `name`: optional name prefix; defaults to `<policy_type>_<comparator names>_<cmd>`
+- `policy_type`: `PolicyType.permissive` (default) or `PolicyType.restrictive`
+- `allow_bypass_rls`: whether the policy can be bypassed with `bypass_rls()` (default `True`)
+
+The final policy name always ends with a short hash of the policy definition, so changing a policy changes its name (see the [alembic docs](./alembic.md)).
 
 #### ConditionArg
 

@@ -5,7 +5,7 @@ import sqlalchemy.orm
 import sqlalchemy.sql
 
 from rls import create_policies
-from rls import schemas
+from rls import policy
 
 
 def _make_base_with_policies(
@@ -41,16 +41,16 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_enable_rls_called_for_table_with_policies(self):
         """ENABLE ROW LEVEL SECURITY must be issued for a table that has at least one policy."""
-        policy = schemas.Permissive(
+        p = policy.Policy.from_sqla(
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.select],
-            custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
+            cmd=policy.Command.select,
+            expr=lambda x: sqlalchemy.sql.column("id") == x,
         )
-        Base = _make_base_with_policies({"my_table": [policy]})
+        Base = _make_base_with_policies({"my_table": [p]})
         conn = self._make_connection()
 
         create_policies.create_policies(Base, conn)
@@ -69,18 +69,18 @@ class TestCreatePolicies(unittest.TestCase):
 
     def test_only_tables_with_policies_are_processed(self):
         """When the dict mixes empty and non-empty policy lists, only tables with policies get ENABLE RLS."""
-        policy = schemas.Permissive(
+        p = policy.Policy.from_sqla(
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.select],
-            custom_expr=lambda x: sqlalchemy.sql.column("id") == x,
+            cmd=policy.Command.select,
+            expr=lambda x: sqlalchemy.sql.column("id") == x,
         )
         Base = _make_base_with_policies(
             {
-                "table_with_policies": [policy],
+                "table_with_policies": [p],
                 "table_without_policies": [],
             }
         )
