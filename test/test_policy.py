@@ -3,7 +3,6 @@ import unittest
 import sqlalchemy
 from sqlalchemy import sql
 
-from rls import _sql_gen
 from rls import policy
 
 
@@ -102,7 +101,7 @@ class TestCompileSqlaExpr(unittest.TestCase):
         self.assertIn("Length mismatch", str(ctx.exception))
 
     def test_non_boolean_expression_raises(self):
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(TypeError) as ctx:
             policy.compile_sqla_expr(
                 expr=lambda x: x + sql.literal(1),
                 condition_args=[
@@ -246,16 +245,28 @@ class TestPolicyFromSqla(unittest.TestCase):
 
 
 class TestHashedPolicyName(unittest.TestCase):
-    def test_changes_with_content(self):
-        self.assertNotEqual(
-            _sql_gen.hashed_policy_name("p", "USING (true)"),
-            _sql_gen.hashed_policy_name("p", "USING (false)"),
-        )
+    def _name(self, **kwargs):
+        args = {
+            "base_name": "p",
+            "policy_type": policy.PolicyType.permissive,
+            "cmd": policy.Command.select,
+            "expr": "true",
+        }
+        args.update(kwargs)
+        return policy._hashed_policy_name(**args)
 
     def test_stable_for_same_content(self):
-        self.assertEqual(
-            _sql_gen.hashed_policy_name("p", "USING (true)"),
-            _sql_gen.hashed_policy_name("p", "USING (true)"),
+        self.assertEqual(self._name(), self._name())
+
+    def test_changes_with_expr(self):
+        self.assertNotEqual(self._name(), self._name(expr="false"))
+
+    def test_changes_with_cmd(self):
+        self.assertNotEqual(self._name(), self._name(cmd=policy.Command.update))
+
+    def test_changes_with_policy_type(self):
+        self.assertNotEqual(
+            self._name(), self._name(policy_type=policy.PolicyType.restrictive)
         )
 
 
