@@ -17,7 +17,8 @@ def base_wrapper(
     declarative base for use with the RLS alembic operations.
 
     If you are not using Alembic, you can also create policies by calling
-    rls.create_policies directly.
+    rls.create_policies.create_policies_no_commit directly (in your own
+    transaction, since it does not commit).
     """
     # Register the alembic operations
     from rls import alembic_ops as _  # noqa: F401

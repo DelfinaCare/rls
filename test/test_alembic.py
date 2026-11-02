@@ -509,7 +509,7 @@ class TestAlembicOperations(unittest.TestCase):
         with self.admin_engine.begin() as conn:
             conn.execute(sqlalchemy.text('CREATE SCHEMA "MixedSchema"'))
             QuotingBase.metadata.create_all(conn)
-            create_policies.create_policies(QuotingBase, conn)
+            create_policies.create_policies_no_commit(QuotingBase, conn)
         self.addCleanup(self._drop_quoting_tables, QuotingBase.metadata)
 
         self.assertEqual(self._rls_flags("order"), (True, True))
@@ -527,14 +527,14 @@ class TestAlembicOperations(unittest.TestCase):
         self.addCleanup(self._drop_quoting_tables, QuotingBase.metadata)
 
         with self.admin_engine.connect() as conn, conn.begin() as trans:
-            create_policies.create_policies(QuotingBase, conn)
+            create_policies.create_policies_no_commit(QuotingBase, conn)
             trans.rollback()
         self.assertEqual(self._quoting_policy_names(), set())
         self.assertEqual(self._rls_flags("order"), (False, False))
 
         for _ in range(2):
             with self.admin_engine.begin() as conn:
-                create_policies.create_policies(QuotingBase, conn)
+                create_policies.create_policies_no_commit(QuotingBase, conn)
         self.assertEqual(len(self._quoting_policy_names()), 3)
         self.assertEqual(self._quoting_table_ops(QuotingBase.metadata), [])
 

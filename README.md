@@ -117,7 +117,7 @@ The final policy name always ends with a short hash of the policy definition, so
 
 #### ExternalPolicy
 
-`ExternalPolicy` declares a policy that already exists on the table and is managed outside of this package (e.g. by hand-written migrations). Alembic autogenerate never creates or drops it, and `rls.create_policies` skips it. It can be mixed with native policies in `__rls_policies__`:
+`ExternalPolicy` declares a policy that already exists on the table and is managed outside of this package (e.g. by hand-written migrations). Alembic autogenerate never creates or drops it, and `rls.create_policies.create_policies_no_commit` skips it. It can be mixed with native policies in `__rls_policies__`:
 
 ```python
 __rls_policies__ = [
@@ -179,16 +179,16 @@ target_metadata = Base.metadata
 You can then generate a revision and run `alembic upgrade head` as normal — the policies will be created or dropped automatically.
 For details on the custom Alembic operations used internally, see the [alembic docs](./alembic.md).
 Set the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` to stop autogenerate from emitting any RLS operations (see the [migration guide](./migration.md)).
-If you are not using alembic, you can call `rls.create_policies` directly.
+If you are not using alembic, you can call `rls.create_policies.create_policies_no_commit` directly.
 
 ```python
 register.base_wrapper(Base)
 Base.metadata.create_all(engine)
 with engine.begin() as connection:
-    create_policies.create_policies(Base, connection)
+    create_policies.create_policies_no_commit(Base, connection)
 ```
 
-`create_policies` raises a `ValueError` if `Base` was not registered with `register.base_wrapper`. It drops and re-creates each declared policy, so it is safe to call again, but it does not drop policies that are no longer declared. It does not commit: transaction control is left to the caller.
+`create_policies_no_commit` raises a `ValueError` if `Base` was not registered with `register.base_wrapper`. It drops and re-creates each declared policy, so it is safe to call again, but it does not drop policies that are no longer declared. It does not commit: transaction control is left to the caller.
 
 ---
 

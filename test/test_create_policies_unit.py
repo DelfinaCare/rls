@@ -26,7 +26,7 @@ class TestCreatePolicies(unittest.TestCase):
         Base = _make_base_with_policies({"no_policy_table": []})
         conn = self._make_connection()
 
-        create_policies.create_policies(Base, conn)
+        create_policies.create_policies_no_commit(Base, conn)
 
         executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
         enable_rls_calls = [
@@ -53,7 +53,7 @@ class TestCreatePolicies(unittest.TestCase):
         Base = _make_base_with_policies({"my_table": [p]})
         conn = self._make_connection()
 
-        create_policies.create_policies(Base, conn)
+        create_policies.create_policies_no_commit(Base, conn)
 
         executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
         enable_rls_calls = [
@@ -86,7 +86,7 @@ class TestCreatePolicies(unittest.TestCase):
         )
         conn = self._make_connection()
 
-        create_policies.create_policies(Base, conn)
+        create_policies.create_policies_no_commit(Base, conn)
 
         executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
         enable_rls_calls = [
@@ -108,7 +108,7 @@ class TestCreatePolicies(unittest.TestCase):
 
     def _executed_sqls(self, Base) -> list[str]:
         conn = self._make_connection()
-        create_policies.create_policies(Base, conn)
+        create_policies.create_policies_no_commit(Base, conn)
         return [str(call.args[0]) for call in conn.execute.call_args_list]
 
     def test_forces_rls_by_default(self):
@@ -165,12 +165,12 @@ class TestCreatePolicies(unittest.TestCase):
     def test_unregistered_base_raises(self):
         Base = sqlalchemy.orm.declarative_base()
         with self.assertRaisesRegex(ValueError, "base_wrapper"):
-            create_policies.create_policies(Base, self._make_connection())
+            create_policies.create_policies_no_commit(Base, self._make_connection())
 
     def test_does_not_commit(self):
         Base = _make_base_with_policies({"my_table": [self._sample_policy()]})
         conn = self._make_connection()
-        create_policies.create_policies(Base, conn)
+        create_policies.create_policies_no_commit(Base, conn)
         conn.commit.assert_not_called()
 
     def test_drops_existing_policy_before_creating(self):

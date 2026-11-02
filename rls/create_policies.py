@@ -16,7 +16,7 @@ def _split_table_name(
     return tablename, schemaname or None
 
 
-def create_policies(
+def create_policies_no_commit(
     Base: type[orm.DeclarativeMeta] | type[orm.DeclarativeBase],
     connection: engine.Connection,
 ):
@@ -31,7 +31,7 @@ def create_policies(
     if "rls_policies" not in Base.metadata.info:
         raise ValueError(
             f"{Base.__name__} is not registered for RLS; call "
-            "rls.register.base_wrapper(Base) before create_policies."
+            "rls.register.base_wrapper(Base) before create_policies_no_commit."
         )
     for table, rls_settings in Base.metadata.info["rls_policies"].items():
         if not rls_settings:

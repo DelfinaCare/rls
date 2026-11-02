@@ -210,9 +210,10 @@ class ExternalPolicy(pydantic.BaseModel):
     List an ``ExternalPolicy`` in a model's ``__rls_policies__`` to declare
     that a policy with this name already exists on the table and is managed
     elsewhere (e.g. by hand-written migrations).  Alembic autogenerate will
-    neither create nor drop it, and ``rls.create_policies`` skips it.  This
-    allows an existing RLS codebase to be migrated to this package one policy
-    at a time.
+    neither create nor drop it, and
+    ``rls.create_policies.create_policies_no_commit`` skips it.  This allows
+    an existing RLS codebase to be migrated to this package one policy at a
+    time.
 
     ``name`` must match the policy name stored in Postgres exactly.
     """
