@@ -142,7 +142,7 @@ class TestRegister(unittest.TestCase):
                 __tablename__ = "invalid_mode"
                 id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
                 __rls_policies__ = self.sample_policies
-                __rls_mode__ = "FORCE"
+                __rls_mode__ = "CLEARLY_INVALID_MODE"
 
 
 if __name__ == "__main__":
