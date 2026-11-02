@@ -147,9 +147,13 @@ _BYPASS_STATEMENT = sqlalchemy.select(
 )
 
 
-def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
+@functools.cache
+def _set_statement_template(
+    model: type[pydantic.BaseModel] | None,
+) -> sqlalchemy.StatementLambdaElement:
     """
-    Pre-computes the SQL template for setting RLS config values at init time.
+    Pre-computes, at init time, the SQL template for setting RLS config values
+    for a context class (``None`` when the session has no context).
 
     All values are set transaction-locally (``is_local => true``), so they are
     discarded at the end of the transaction and never leak to other users of a
@@ -160,7 +164,12 @@ def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
     _pending_rls_statements() then only needs to substitute the current field
     values into this template, which is significantly cheaper than rebuilding
     the entire statement every time.
+
+    The template is wrapped in SQLAlchemy's lambda statement infrastructure so
+    the statement construction and its compilation are cached; only the bound
+    values need to be supplied at execution time.
     """
+    keys = list(model.model_fields.keys()) if model is not None else []
     set_config_calls = [
         sqlalchemy.func.set_config(
             sqlalchemy.literal("rls.bypass_rls"),
@@ -180,7 +189,8 @@ def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
                 sqlalchemy.true(),
             )
         )
-    return sqlalchemy.select(*set_config_calls)
+    template = sqlalchemy.select(*set_config_calls)
+    return sqlalchemy.lambda_stmt(lambda: template)
 
 
 class _RlsSessionState:
@@ -209,16 +219,12 @@ class _RlsSessionState:
         self._rls_syncing = False
         self._context = context
         self._rls_context_is_immutable = _is_context_immutable(context)
-        self._rls_context_keys: list[str] = (
-            list(type(self._context).model_fields.keys()) if self._context else []
+        # The statement template and the function rendering the current field
+        # values into its bind params are each built (and validated) once per
+        # context class.
+        self._rls_set_statement = _set_statement_template(
+            type(context) if context else None
         )
-        template = _set_statement_template(self._rls_context_keys)
-        # Wrap the template in SQLAlchemy's lambda statement infrastructure so
-        # the statement construction and its compilation are cached; only the
-        # bound values need to be supplied at execution time.
-        self._rls_set_statement = sqlalchemy.lambda_stmt(lambda: template)
-        # Built (and validated) once per context class alongside the template;
-        # renders the current field values into the template's bind params.
         self._rls_render_values: _RenderValues = (
             _render_values_function(type(context)) if context else _render_no_values
         )
