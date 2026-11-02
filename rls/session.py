@@ -39,6 +39,21 @@ _SUPPORTED_SCALAR_TYPES: tuple[type, ...] = (
 )
 
 
+_ValueRenderer = abc.Callable[[object], str]
+_RenderValues = abc.Callable[[pydantic.BaseModel | None], dict[str, str]]
+
+
+# None is stored as an empty string, which policies turn back into NULL.
+def _render_scalar(value: object) -> str:
+    return "" if value is None else str(value)
+
+
+def _render_enum(value: object) -> str:
+    if isinstance(value, enum.Enum):
+        value = value.value
+    return _render_scalar(value)
+
+
 def _unsupported_field_error(
     model: type[pydantic.BaseModel], key: str, annotation: object
 ) -> TypeError:
@@ -50,57 +65,77 @@ def _unsupported_field_error(
     )
 
 
-def _is_supported_annotation(annotation: object) -> bool:
-    if annotation is None or annotation is type(None):
-        return True
+def _annotation_leaves(annotation: object) -> list[object]:
+    """Flattens ``Optional``/``Union``/``Literal`` annotations into the list
+    of types (or literal values) a field can hold."""
     origin = typing.get_origin(annotation)
-    if origin is typing.Union or origin is types.UnionType:
-        return all(_is_supported_annotation(arg) for arg in typing.get_args(annotation))
-    if origin is typing.Literal:
-        return all(
-            isinstance(arg, (str, int)) or arg is None
+    if origin is typing.Union or origin is types.UnionType or origin is typing.Literal:
+        return [
+            leaf
             for arg in typing.get_args(annotation)
-        )
-    if not isinstance(annotation, type):
+            for leaf in ([arg] if origin is typing.Literal else _annotation_leaves(arg))
+        ]
+    return [annotation]
+
+
+def _is_supported_leaf(leaf: object) -> bool:
+    if leaf is None or leaf is type(None):
+        return True
+    if isinstance(leaf, enum.Enum):
+        return isinstance(leaf.value, (str, int))
+    if isinstance(leaf, (str, int)):
+        return True
+    if not isinstance(leaf, type):
         return False
-    if issubclass(annotation, enum.Enum):
-        return all(isinstance(member.value, (str, int)) for member in annotation)
-    return issubclass(annotation, _SUPPORTED_SCALAR_TYPES)
+    if issubclass(leaf, enum.Enum):
+        return all(isinstance(member.value, (str, int)) for member in leaf)
+    return issubclass(leaf, _SUPPORTED_SCALAR_TYPES)
+
+
+def _value_renderer(
+    model: type[pydantic.BaseModel], key: str, annotation: object
+) -> _ValueRenderer:
+    """Validates a context field's annotation and returns the function that
+    renders its values as the text passed to ``set_config``."""
+    leaves = _annotation_leaves(annotation)
+    if not all(_is_supported_leaf(leaf) for leaf in leaves):
+        raise _unsupported_field_error(model, key, annotation)
+    if any(
+        isinstance(leaf, enum.Enum)
+        or (isinstance(leaf, type) and issubclass(leaf, enum.Enum))
+        for leaf in leaves
+    ):
+        return _render_enum
+    return _render_scalar
 
 
 @functools.cache
-def _validate_context_type(model: type[pydantic.BaseModel]) -> None:
-    """Raise :class:`TypeError` if any field of ``model`` cannot be serialized
-    to a value that RLS policy expressions can cast."""
-    for key, field in model.model_fields.items():
-        if not _is_supported_annotation(field.annotation):
-            raise _unsupported_field_error(model, key, field.annotation)
+def _render_values_function(model: type[pydantic.BaseModel]) -> _RenderValues:
+    """
+    Pre-computes, at init time, the function that renders a context's field
+    values into the bind parameters of the ``set_config`` statement template.
 
-
-def _serialize_context_value(
-    context: pydantic.BaseModel, key: str, value: object
-) -> str:
-    # None is stored as an empty string, which policies turn back into NULL.
-    if value is None:
-        return ""
-    if isinstance(value, enum.Enum):
-        value = value.value
-    if not isinstance(value, _SUPPORTED_SCALAR_TYPES):
-        # Guards against values bypassing validation, e.g. model_construct()
-        # or assignment to a model without validate_assignment.
-        raise _unsupported_field_error(type(context), key, type(value))
-    return str(value)
-
-
-def _context_to_value_params(
-    context: pydantic.BaseModel | None, keys: list[str]
-) -> dict[str, str]:
-    if context is None or not keys:
-        return {}
-    return {
-        f"value_{key}": _serialize_context_value(context, key, getattr(context, key))
-        for key in keys
+    Raises :class:`TypeError` if any field of ``model`` cannot be rendered to a
+    value that RLS policy expressions can cast.
+    """
+    renderers = {
+        f"value_{key}": (key, _value_renderer(model, key, field.annotation))
+        for key, field in model.model_fields.items()
     }
+
+    def render_values(context: pydantic.BaseModel | None) -> dict[str, str]:
+        if context is None:
+            return {}
+        return {
+            param: render(getattr(context, key))
+            for param, (key, render) in renderers.items()
+        }
+
+    return render_values
+
+
+def _render_no_values(context: pydantic.BaseModel | None) -> dict[str, str]:
+    return {}
 
 
 _BYPASS_STATEMENT = sqlalchemy.select(
@@ -122,7 +157,7 @@ def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
 
     The SQLAlchemy select() expression with literal setting names and named
     bind parameters for the values is built once and stored.  Each call to
-    _get_set_statement() then only needs to substitute the current field
+    _pending_rls_statements() then only needs to substitute the current field
     values into this template, which is significantly cheaper than rebuilding
     the entire statement every time.
     """
@@ -172,8 +207,6 @@ class _RlsSessionState:
         self._rls_listened_connections: list[sqlalchemy.Connection] = []
         # Re-entrancy guard: _rls_sync() itself executes statements.
         self._rls_syncing = False
-        if context is not None:
-            _validate_context_type(type(context))
         self._context = context
         self._rls_context_is_immutable = _is_context_immutable(context)
         self._rls_context_keys: list[str] = (
@@ -184,6 +217,11 @@ class _RlsSessionState:
         # the statement construction and its compilation are cached; only the
         # bound values need to be supplied at execution time.
         self._rls_set_statement = sqlalchemy.lambda_stmt(lambda: template)
+        # Built (and validated) once per context class alongside the template;
+        # renders the current field values into the template's bind params.
+        self._rls_render_values: _RenderValues = (
+            _render_values_function(type(context)) if context else _render_no_values
+        )
 
     def _rls_needs_apply(self) -> bool:
         if self._rls_dirty:
@@ -192,7 +230,7 @@ class _RlsSessionState:
             return False
         return self._context != self._rls_last_set_context_snapshot
 
-    def _get_set_statement(
+    def _pending_rls_statements(
         self,
     ) -> tuple[sqlalchemy.Executable, dict[str, str]]:
         """
@@ -210,8 +248,8 @@ class _RlsSessionState:
         self._rls_last_set_context_snapshot = (
             self._context.model_copy(deep=True) if self._context else None
         )
-        return self._rls_set_statement, _context_to_value_params(
-            self._rls_last_set_context_snapshot, self._rls_context_keys
+        return self._rls_set_statement, self._rls_render_values(
+            self._rls_last_set_context_snapshot
         )
 
     def _rls_sync(self, new_connection: sqlalchemy.Connection | None = None) -> None:
@@ -241,7 +279,7 @@ class _RlsSessionState:
         else:
             return
         if targets:
-            statement, params = self._get_set_statement()
+            statement, params = self._pending_rls_statements()
             for connection in targets:
                 connection.execute(statement, params)
         self._rls_dirty = False

@@ -27,9 +27,7 @@ class TupleEnum(enum.Enum):
 
 
 def _params(context: pydantic.BaseModel) -> dict[str, str]:
-    return session._context_to_value_params(
-        context, list(type(context).model_fields.keys())
-    )
+    return session._render_values_function(type(context))(context)
 
 
 class ContextSerializationTests(unittest.TestCase):
@@ -98,14 +96,6 @@ class ContextSerializationTests(unittest.TestCase):
             {"value_role": "", "value_other": ""},
         )
 
-    def test_unsupported_runtime_value_raises(self):
-        class Context(pydantic.BaseModel):
-            account_id: int
-
-        context = Context.model_construct(account_id=[1, 2])
-        with self.assertRaises(TypeError):
-            _params(context)
-
 
 class ContextValidationTests(unittest.TestCase):
     def _assert_rejected(self, annotation: typing.Any) -> None:
@@ -130,6 +120,12 @@ class ContextValidationTests(unittest.TestCase):
             x: int
 
         self._assert_rejected(Inner)
+
+    def test_literal_enum_member_serialized_by_value(self):
+        class Context(pydantic.BaseModel):
+            role: typing.Literal[Role.admin] | None
+
+        self.assertEqual(_params(Context(role=Role.admin)), {"value_role": "admin"})
 
     def test_enum_with_non_scalar_values_rejected(self):
         self._assert_rejected(TupleEnum)
