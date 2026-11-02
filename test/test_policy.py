@@ -335,6 +335,24 @@ class TestPolicyRenderPolicy(unittest.TestCase):
         sql_text = str(p.render_policy("users"))
         self.assertIn("RESTRICTIVE", sql_text)
 
+    def test_identifiers_are_quoted(self):
+        for name, table, schema, expected in (
+            ("test_policy", "user", None, 'test_policy ON "user"'),
+            ("test_policy", "Order", None, 'test_policy ON "Order"'),
+            ("My Policy", "Docs", "MySchema", '"My Policy" ON "MySchema"."Docs"'),
+            ("test_policy", "users", "myschema", "test_policy ON myschema.users"),
+        ):
+            with self.subTest(name=name, table=table, schema=schema):
+                p = policy.Policy(name=name, cmd=policy.Command.select, expr="id = 1")
+                sql_text = str(p.render_policy(table, schemaname=schema))
+                self.assertIn(f"CREATE POLICY {expected} AS", sql_text)
+
+    def test_colons_in_identifiers_are_not_bind_params(self):
+        p = policy.Policy(name="a :b", cmd=policy.Command.select, expr="id = 1")
+        stmt = p.render_policy("t:x")
+        self.assertEqual(stmt.compile().params, {})
+        self.assertIn('CREATE POLICY "a :b" ON "t:x"', str(stmt))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -131,6 +131,26 @@ class TestCreatePolicies(unittest.TestCase):
         )
         self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY;", executed_sqls)
 
+    def test_identifiers_are_quoted(self):
+        Base = _make_base_with_policies({})
+        sqlalchemy.Table(
+            "Docs",
+            Base.metadata,
+            sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True),
+            schema="MySchema",
+        )
+        Base.metadata.info["rls_policies"] = {
+            "user": [self._sample_policy()],
+            "MySchema.Docs": [self._sample_policy()],
+        }
+        executed_sqls = self._executed_sqls(Base)
+        self.assertIn('ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;', executed_sqls)
+        self.assertIn(
+            'ALTER TABLE "MySchema"."Docs" FORCE ROW LEVEL SECURITY;', executed_sqls
+        )
+        self.assertTrue(any('ON "user"' in s for s in executed_sqls))
+        self.assertTrue(any('ON "MySchema"."Docs"' in s for s in executed_sqls))
+
 
 if __name__ == "__main__":
     unittest.main()

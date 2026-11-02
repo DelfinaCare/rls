@@ -533,6 +533,44 @@ class TestCompareTableLevel(unittest.TestCase):
         self.assertEqual(len(drop_ops), 1)
         self.assertEqual(drop_ops[0].policy_name, "orphan_policy")
 
+    def test_existing_policies_not_recreated_when_rls_disabled(self):
+        """Policies present on a table with RLS disabled are not re-created."""
+        meta_policy = _sample_policy()
+        db_policy = policy.Policy(
+            name=meta_policy.name,
+            cmd=meta_policy.cmd,
+            expr="(id = 1)",
+            policy_type=meta_policy.policy_type,
+        )
+        modify_ops = self._build_context(
+            table_exists=True,
+            rls_enabled=False,
+            rls_forced=False,
+            db_policies=[db_policy],
+            meta_policies={"users": [meta_policy]},
+        )
+        self.assertEqual([type(op) for op in modify_ops.ops], [alembic_ops.EnableRlsOp])
+
+    def test_drops_stale_policies_when_rls_disabled(self):
+        """Policies left on a table with RLS disabled are dropped if unwanted."""
+        db_policy = policy.Policy(
+            name="stale_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        modify_ops = self._build_context(
+            table_exists=True,
+            rls_enabled=False,
+            rls_forced=False,
+            db_policies=[db_policy],
+            meta_policies={},
+        )
+        self.assertEqual(
+            [type(op) for op in modify_ops.ops], [alembic_ops.DropPolicyOp]
+        )
+        self.assertEqual(modify_ops.ops[0].policy_name, "stale_policy")
+
     def test_no_ops_when_names_match_despite_rewritten_expression(self):
         """Postgres rewrites stored expressions; matching names means no change."""
         meta_policy = _sample_policy()
@@ -829,6 +867,77 @@ class TestSchemaQualifiedPolicyOps(unittest.TestCase):
             ),
         ):
             self.assertIn("schemaname='myschema'", result)
+
+
+class TestIdentifierQuoting(unittest.TestCase):
+    """Reserved words, mixed case and special characters must be quoted."""
+
+    def _policy_op(self, **kw) -> alembic_ops.CreatePolicyOp:
+        return alembic_ops.CreatePolicyOp(
+            table_name=kw.get("table_name", "user"),
+            policy_name=kw.get("policy_name", "My Policy"),
+            policy_type="PERMISSIVE",
+            cmd="SELECT",
+            expr="id = 1",
+            schemaname=kw.get("schemaname", "MySchema"),
+        )
+
+    def test_enable_rls_quotes_identifiers(self):
+        for tablename, schemaname, expected in (
+            ("user", None, '"user"'),
+            ("Order", None, '"Order"'),
+            ("Docs", "MySchema", '"MySchema"."Docs"'),
+            ("users", "myschema", "myschema.users"),
+        ):
+            with self.subTest(tablename=tablename, schemaname=schemaname):
+                ops = _mock_operations()
+                alembic_ops.enable_rls(
+                    ops, alembic_ops.EnableRlsOp(tablename, schemaname=schemaname)
+                )
+                self.assertEqual(
+                    ops.execute.call_args_list,
+                    [
+                        mock.call(f"ALTER TABLE {expected} ENABLE ROW LEVEL SECURITY"),
+                        mock.call(f"ALTER TABLE {expected} FORCE ROW LEVEL SECURITY"),
+                    ],
+                )
+
+    def test_disable_rls_quotes_identifiers(self):
+        ops = _mock_operations()
+        alembic_ops.disable_rls(
+            ops, alembic_ops.DisableRlsOp("user", schemaname="MySchema")
+        )
+        self.assertEqual(
+            ops.execute.call_args_list,
+            [
+                mock.call('ALTER TABLE "MySchema"."user" NO FORCE ROW LEVEL SECURITY'),
+                mock.call('ALTER TABLE "MySchema"."user" DISABLE ROW LEVEL SECURITY'),
+            ],
+        )
+
+    def test_create_policy_quotes_identifiers(self):
+        ops = _mock_operations()
+        alembic_ops.create_policy(ops, self._policy_op())
+        self.assertIn(
+            'CREATE POLICY "My Policy" ON "MySchema"."user"',
+            str(ops.execute.call_args[0][0]),
+        )
+
+    def test_drop_policy_quotes_identifiers(self):
+        ops = _mock_operations()
+        alembic_ops.drop_policy(ops, self._policy_op().reverse())
+        ops.execute.assert_called_once_with(
+            'DROP POLICY "My Policy" ON "MySchema"."user";'
+        )
+
+    def test_colons_in_identifiers_are_not_bind_params(self):
+        ops = _mock_operations()
+        alembic_ops.drop_policy(
+            ops, self._policy_op(policy_name="a :b", table_name="t:x").reverse()
+        )
+        stmt = sqlalchemy.text(ops.execute.call_args[0][0])
+        self.assertEqual(stmt.compile().params, {})
+        self.assertEqual(str(stmt), 'DROP POLICY "a :b" ON "MySchema"."t:x";')
 
 
 if __name__ == "__main__":

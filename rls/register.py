@@ -1,3 +1,6 @@
+import typing
+
+import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy import orm
 
@@ -32,13 +35,32 @@ def base_wrapper_hook(mapper: orm.Mapper, class_: orm.DeclarativeMeta) -> None:
     """Listen for mappers being configured, and add any __rls_policies__ (and
     the optional __rls_mode__) to the metadata info dict which has an
     rls_policies key.
+
+    Policies are registered against the mapper's own (local) table.  A
+    subclass that merely inherits ``__rls_policies__`` from a mapped parent
+    does not register anything, so the parent's policies are left intact.
+    Single-table inheritance subclasses share their parent's table, so they
+    may not declare their own policies.
     """
     if "rls_policies" not in class_.metadata.info:
         return
-    if not hasattr(class_, "__rls_policies__"):
+    rls_policies = getattr(class_, "__rls_policies__", None)
+    if rls_policies is None:
         return
-    table_name = mapper.tables[0].fullname
-    class_.metadata.info["rls_policies"][table_name] = class_.__rls_policies__
+    if mapper.inherits is not None and rls_policies is getattr(
+        mapper.inherits.class_, "__rls_policies__", None
+    ):
+        # Inherited from a mapped parent, which registers them itself.
+        return
+    if mapper.single:
+        raise TypeError(
+            f"{class_.__name__} uses single-table inheritance and shares the "
+            f"{mapper.local_table.description!r} table with its parent, so it "
+            "cannot declare its own __rls_policies__. Declare them on the "
+            "class that defines the table instead."
+        )
+    table_name = typing.cast(sqlalchemy.Table, mapper.local_table).fullname
+    class_.metadata.info["rls_policies"][table_name] = rls_policies
     class_.metadata.info.setdefault("rls_modes", {})[table_name] = policy.RlsMode(
         getattr(class_, "__rls_mode__", policy.DEFAULT_RLS_MODE)
     )
