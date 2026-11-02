@@ -92,6 +92,11 @@ class _RlsSessionState:
         self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
         # Connections participating in the current root transaction.
         self._rls_connections: list[sqlalchemy.Connection] = []
+        # Connections handed out by connection() that have a before_execute
+        # listener applying RLS changes to statements run directly on them.
+        self._rls_listened_connections: list[sqlalchemy.Connection] = []
+        # Re-entrancy guard: _rls_sync() itself executes statements.
+        self._rls_syncing = False
         self._context = context
         self._rls_context_is_immutable = _is_context_immutable(context)
         self._rls_context_keys: list[str] = (
@@ -138,6 +143,17 @@ class _RlsSessionState:
         A newly begun connection always receives the settings; existing
         connections only receive them if the desired state has changed.
         """
+        if self._rls_syncing:
+            return
+        self._rls_syncing = True
+        try:
+            self._rls_sync_unguarded(new_connection)
+        finally:
+            self._rls_syncing = False
+
+    def _rls_sync_unguarded(
+        self, new_connection: sqlalchemy.Connection | None = None
+    ) -> None:
         needs_apply = self._rls_needs_apply()
         if new_connection is not None:
             self._rls_connections.append(new_connection)
@@ -153,10 +169,32 @@ class _RlsSessionState:
                 connection.execute(statement, params)
         self._rls_dirty = False
 
+    def _rls_before_execute(
+        self,
+        connection: sqlalchemy.Connection,
+        clauseelement: object,
+        multiparams: object,
+        params: object,
+        execution_options: object,
+    ) -> None:
+        self._rls_sync()
+
+    def _rls_listen(self, connection: sqlalchemy.Connection) -> None:
+        """Apply RLS changes to statements executed directly on ``connection``."""
+        if connection not in self._rls_listened_connections:
+            event.listen(connection, "before_execute", self._rls_before_execute)
+            self._rls_listened_connections.append(connection)
+
+    def _rls_unlisten_all(self) -> None:
+        for connection in self._rls_listened_connections:
+            event.remove(connection, "before_execute", self._rls_before_execute)
+        self._rls_listened_connections = []
+
     def _rls_transaction_ended(self, transaction: orm.SessionTransaction) -> None:
         if transaction.parent is None:
             # Transaction-local settings are gone with the transaction.
             self._rls_connections = []
+            self._rls_unlisten_all()
             self._rls_dirty = True
         elif transaction.nested:
             # Rolling back to a savepoint reverts settings made inside it.
@@ -371,6 +409,7 @@ class RlsSession(_RlsSessionState, orm.Session):
     def connection(self, *args, **kwargs) -> sqlalchemy.Connection:
         connection = super().connection(*args, **kwargs)
         self._rls_sync()
+        self._rls_listen(connection)
         return connection
 
     def commit(self):

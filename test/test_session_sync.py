@@ -819,6 +819,62 @@ class SyncRLSRegressionTests(unittest.TestCase):
                 conn = rls_sess.connection()
                 self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1, 2])
 
+    def test_connection_sees_bypass_enter_and_exit(self):
+        """Raw statements on an existing connection follow bypass_rls()."""
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=1), bind=self.engine
+        ) as rls_sess:
+            conn = rls_sess.connection()
+            self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1])
+            with rls_sess.bypass_rls():
+                self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1, 2])
+            self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1])
+
+    def test_connection_sees_mutated_context(self):
+        """Raw statements on an existing connection see context mutations."""
+        context = models.SampleRlsContext(account_id=1)
+        with session.RlsSession(context=context, bind=self.engine) as rls_sess:
+            conn = rls_sess.connection()
+            self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1])
+            context.account_id = 2
+            self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [2])
+
+    def test_connection_no_extra_set_config(self):
+        """Repeated raw statements do not re-send unchanged settings."""
+        statements = self._count_set_config()
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=1), bind=self.engine
+        ) as rls_sess:
+            conn = rls_sess.connection()
+            self.assertEqual(rls_sess.connection(), conn)
+            for _ in range(3):
+                conn.execute(_USER_ID_QUERY)
+            rls_sess.execute(_USER_ID_QUERY)
+            self.assertEqual(len(statements), 1)
+
+    def test_connection_listener_removed_after_transaction(self):
+        """No listener or session reference remains after commit or rollback."""
+        for end in ("commit", "rollback"):
+            with (
+                self.subTest(end=end),
+                session.RlsSession(
+                    context=models.SampleRlsContext(account_id=1), bind=self.engine
+                ) as rls_sess,
+            ):
+                conn = rls_sess.connection()
+                self.assertTrue(
+                    sqlalchemy.event.contains(
+                        conn, "before_execute", rls_sess._rls_before_execute
+                    )
+                )
+                getattr(rls_sess, end)()
+                self.assertFalse(
+                    sqlalchemy.event.contains(
+                        conn, "before_execute", rls_sess._rls_before_execute
+                    )
+                )
+                self.assertEqual(rls_sess._rls_listened_connections, [])
+
     def test_settings_applied_once_per_transaction(self):
         """Repeated statements in one transaction do not re-send settings."""
         statements = self._count_set_config()

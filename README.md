@@ -178,7 +178,7 @@ with session.bypass_rls() as session:
     res2 = session.execute(text("SELECT * FROM items")).fetchall()
 ```
 
-The context is applied to everything the session sends to the database: `execute`/`scalar(s)`, `get`, `refresh`, lazy loads, ORM flushes and `session.connection()`. `AsyncRlsSession` behaves the same way.
+The context is applied to everything the session sends to the database: `execute`/`scalar(s)`, `get`, `refresh`, lazy loads, ORM flushes and `session.connection()` (including later changes to the context or `bypass_rls()` state for statements run directly on that connection). `AsyncRlsSession` behaves the same way.
 
 Settings are applied with `set_config(..., is_local => true)`, so they only last until the end of the current transaction and never leak to the next user of a pooled connection. They are sent once at the start of each transaction, and again only when they change: entering or exiting `bypass_rls()`, changing a mutable context, or rolling back a savepoint.
 

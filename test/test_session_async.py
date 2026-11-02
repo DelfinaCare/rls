@@ -805,6 +805,41 @@ class AsyncRLSRegressionTests(unittest.IsolatedAsyncioTestCase):
         async with session.AsyncRlsSession(context=None, bind=self.engine) as sess:
             self.assertEqual((await sess.scalars(_USER_ID_QUERY)).all(), [])
 
+    async def test_connection_sees_bypass_enter_and_exit(self):
+        """Raw statements on an existing connection follow bypass_rls()."""
+        async with self._new_session(1) as rls_sess:
+            conn = await rls_sess.connection()
+            self.assertEqual((await conn.execute(_USER_ID_QUERY)).scalars().all(), [1])
+            async with rls_sess.bypass_rls():
+                self.assertEqual(
+                    (await conn.execute(_USER_ID_QUERY)).scalars().all(), [1, 2]
+                )
+            self.assertEqual((await conn.execute(_USER_ID_QUERY)).scalars().all(), [1])
+
+    async def test_connection_sees_mutated_context(self):
+        """Raw statements on an existing connection see context mutations."""
+        context = models.SampleRlsContext(account_id=1)
+        async with session.AsyncRlsSession(context=context, bind=self.engine) as sess:
+            conn = await sess.connection()
+            self.assertEqual((await conn.execute(_USER_ID_QUERY)).scalars().all(), [1])
+            context.account_id = 2
+            self.assertEqual((await conn.execute(_USER_ID_QUERY)).scalars().all(), [2])
+
+    async def test_connection_listener_removed_after_commit(self):
+        """No listener remains on the connection after commit."""
+        async with self._new_session(1) as rls_sess:
+            conn = await rls_sess.connection()
+            sync_conn = conn.sync_connection
+            assert sync_conn is not None
+            listener = rls_sess.sync_session._rls_before_execute
+            self.assertTrue(
+                sqlalchemy.event.contains(sync_conn, "before_execute", listener)
+            )
+            await rls_sess.commit()
+            self.assertFalse(
+                sqlalchemy.event.contains(sync_conn, "before_execute", listener)
+            )
+
     async def test_rejects_non_rls_sync_session_class(self):
         """sync_session_class must be an RlsSession."""
         with self.assertRaises(TypeError):
