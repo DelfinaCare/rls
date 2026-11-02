@@ -1,3 +1,4 @@
+import enum
 import unittest
 
 import pydantic
@@ -269,6 +270,24 @@ class SyncRLSTests(unittest.TestCase):
         with rls_sess.begin():
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
+        rls_sess.close()
+
+    def test_int_enum_context_field_filters_results(self):
+        """An enum context field is sent by value, so the policy cast works."""
+
+        class Account(enum.IntEnum):
+            first = 1
+
+        class EnumContext(pydantic.BaseModel):
+            account_id: Account
+
+        rls_sess = session.RlsSession(
+            context=EnumContext(account_id=Account.first), bind=self.engine
+        )
+        with rls_sess.begin():
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
+            rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(rows, [1])
         rls_sess.close()
 
     def test_none_context_returns_no_rows(self):

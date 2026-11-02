@@ -1,4 +1,10 @@
+import datetime
+import decimal
+import enum
+import functools
+import types
 import typing
+import uuid
 from collections import abc
 
 import pydantic
@@ -17,13 +23,82 @@ def _is_context_immutable(context: pydantic.BaseModel | None) -> bool:
     return bool(model_config.get("frozen"))
 
 
+# Scalar types whose ``str()`` is a text representation PostgreSQL can cast
+# back to the matching column type in a policy expression.  Enums are handled
+# separately: they are serialized by their ``.value``.
+_SUPPORTED_SCALAR_TYPES: tuple[type, ...] = (
+    str,
+    int,
+    float,
+    bool,
+    decimal.Decimal,
+    uuid.UUID,
+    datetime.datetime,
+    datetime.date,
+    datetime.time,
+)
+
+
+def _unsupported_field_error(
+    model: type[pydantic.BaseModel], key: str, annotation: object
+) -> TypeError:
+    return TypeError(
+        f"Unsupported type {annotation!r} for RLS context field "
+        f"{model.__name__}.{key}. Supported types are str, int, float, bool, "
+        "Decimal, UUID, datetime, date, time, enums with str or int values, "
+        "and Optional/Union combinations of these."
+    )
+
+
+def _is_supported_annotation(annotation: object) -> bool:
+    if annotation is None or annotation is type(None):
+        return True
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        return all(_is_supported_annotation(arg) for arg in typing.get_args(annotation))
+    if origin is typing.Literal:
+        return all(
+            isinstance(arg, (str, int)) or arg is None
+            for arg in typing.get_args(annotation)
+        )
+    if not isinstance(annotation, type):
+        return False
+    if issubclass(annotation, enum.Enum):
+        return all(isinstance(member.value, (str, int)) for member in annotation)
+    return issubclass(annotation, _SUPPORTED_SCALAR_TYPES)
+
+
+@functools.cache
+def _validate_context_type(model: type[pydantic.BaseModel]) -> None:
+    """Raise :class:`TypeError` if any field of ``model`` cannot be serialized
+    to a value that RLS policy expressions can cast."""
+    for key, field in model.model_fields.items():
+        if not _is_supported_annotation(field.annotation):
+            raise _unsupported_field_error(model, key, field.annotation)
+
+
+def _serialize_context_value(
+    context: pydantic.BaseModel, key: str, value: object
+) -> str:
+    # None is stored as an empty string, which policies turn back into NULL.
+    if value is None:
+        return ""
+    if isinstance(value, enum.Enum):
+        value = value.value
+    if not isinstance(value, _SUPPORTED_SCALAR_TYPES):
+        # Guards against values bypassing validation, e.g. model_construct()
+        # or assignment to a model without validate_assignment.
+        raise _unsupported_field_error(type(context), key, type(value))
+    return str(value)
+
+
 def _context_to_value_params(
     context: pydantic.BaseModel | None, keys: list[str]
 ) -> dict[str, str]:
     if context is None or not keys:
         return {}
     return {
-        f"value_{key}": "" if (x := getattr(context, key)) is None else str(x)
+        f"value_{key}": _serialize_context_value(context, key, getattr(context, key))
         for key in keys
     }
 
@@ -97,6 +172,8 @@ class _RlsSessionState:
         self._rls_listened_connections: list[sqlalchemy.Connection] = []
         # Re-entrancy guard: _rls_sync() itself executes statements.
         self._rls_syncing = False
+        if context is not None:
+            _validate_context_type(type(context))
         self._context = context
         self._rls_context_is_immutable = _is_context_immutable(context)
         self._rls_context_keys: list[str] = (
