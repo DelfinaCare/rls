@@ -129,6 +129,9 @@ class TestCreatePolicies(unittest.TestCase):
         self.assertNotIn(
             "ALTER TABLE my_table FORCE ROW LEVEL SECURITY;", executed_sqls
         )
+        self.assertIn(
+            "ALTER TABLE my_table NO FORCE ROW LEVEL SECURITY;", executed_sqls
+        )
         self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY;", executed_sqls)
 
     def test_identifiers_are_quoted(self):
@@ -158,6 +161,28 @@ class TestCreatePolicies(unittest.TestCase):
         executed_sqls = self._executed_sqls(Base)
         self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;", executed_sqls)
         self.assertFalse(any("CREATE POLICY" in s for s in executed_sqls))
+
+    def test_unregistered_base_raises(self):
+        Base = sqlalchemy.orm.declarative_base()
+        with self.assertRaisesRegex(ValueError, "base_wrapper"):
+            create_policies.create_policies(Base, self._make_connection())
+
+    def test_does_not_commit(self):
+        Base = _make_base_with_policies({"my_table": [self._sample_policy()]})
+        conn = self._make_connection()
+        create_policies.create_policies(Base, conn)
+        conn.commit.assert_not_called()
+
+    def test_drops_existing_policy_before_creating(self):
+        p = self._sample_policy()
+        Base = _make_base_with_policies({"user": [p]})
+        executed_sqls = self._executed_sqls(Base)
+        drop_sql = f'DROP POLICY IF EXISTS {p.name} ON "user";'
+        self.assertIn(drop_sql, executed_sqls)
+        create_ix = next(
+            i for i, s in enumerate(executed_sqls) if s.startswith("CREATE POLICY")
+        )
+        self.assertLess(executed_sqls.index(drop_sql), create_ix)
 
 
 if __name__ == "__main__":

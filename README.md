@@ -181,6 +181,15 @@ For details on the custom Alembic operations used internally, see the [alembic d
 Set the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` to stop autogenerate from emitting any RLS operations (see the [migration guide](./migration.md)).
 If you are not using alembic, you can call `rls.create_policies` directly.
 
+```python
+register.base_wrapper(Base)
+Base.metadata.create_all(engine)
+with engine.begin() as connection:
+    create_policies.create_policies(Base, connection)
+```
+
+`create_policies` raises a `ValueError` if `Base` was not registered with `register.base_wrapper`. It drops and re-creates each declared policy, so it is safe to call again, but it does not drop policies that are no longer declared. It does not commit: transaction control is left to the caller.
+
 ---
 
 ### Using Policies at Runtime

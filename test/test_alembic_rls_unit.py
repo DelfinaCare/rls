@@ -54,10 +54,12 @@ class TestCheckRlsPolicies(unittest.TestCase):
                     list(query.selected_columns.keys()),
                     ["policyname", "permissive", "cmd", "roles", "qual", "with_check"],
                 )
-                self.assertEqual(
-                    query.compile().params,
-                    {"schemaname_1": schema or "public", "tablename_1": "users"},
-                )
+                expected_params = {"tablename_1": "users"}
+                if schema is None:
+                    self.assertIn("current_schema()", str(query))
+                else:
+                    expected_params["schemaname_1"] = schema
+                self.assertEqual(query.compile().params, expected_params)
                 self.assertEqual(len(policies), 1)
                 self.assertEqual(policies[0].name, "pol1")
                 self.assertEqual(policies[0].cmd, policy.Command.select)

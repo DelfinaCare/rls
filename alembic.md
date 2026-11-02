@@ -28,6 +28,8 @@ All four operations accept an optional `schemaname` argument for tables outside 
 
 Table, schema and policy names are passed unquoted and are quoted as needed, so reserved words (e.g. `user`, `order`), mixed-case names and policy names with spaces work as expected.
 
+Tables without a schema are looked up in the connection's `current_schema()` (the first existing schema on its `search_path`), not assumed to be in `public`.
+
 Autogenerate compares against the policies that exist on a table even when RLS is currently disabled on it, so existing policies are not re-created and stale ones are dropped.
 
 Policies declared as `ExternalPolicy` are managed outside of this package: autogenerate never creates or drops them. Setting the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` (or `true`, `yes`, `on`) disables all RLS autogenerate operations. Both are intended for migrating an existing RLS codebase, see the [migration guide](./migration.md).
