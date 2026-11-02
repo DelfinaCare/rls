@@ -6,8 +6,8 @@ from sqlalchemy import orm
 from sqlalchemy import sql
 from sqlalchemy.ext import asyncio as sa_asyncio
 
+from rls import policy
 from rls import register
-from rls import schemas
 
 
 class Base(orm.DeclarativeBase):
@@ -23,16 +23,15 @@ class User(sa_asyncio.AsyncAttrs, Base):
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True, index=True)
     username = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
 
-    __rls_policies__: typing.ClassVar[list[schemas.Policy]] = [
-        schemas.Permissive(
+    __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
+        policy.Policy.from_sqla(
+            expr=lambda x: sql.column("id") == x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.select, schemas.Command.update],
-            custom_expr=lambda x: sql.column("id") == x,
-            custom_policy_name="equal_to_accountId_policy",
+            cmd=policy.Command.all,
         ),
     ]
 
@@ -49,36 +48,33 @@ class Item(Base):
 
     owner = orm.relationship("User")
 
-    __rls_policies__: typing.ClassVar[list[schemas.Policy]] = [
-        schemas.Permissive(
+    __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
+        policy.Policy.from_sqla(
+            expr=lambda x: sql.column("owner_id") == x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.select, schemas.Command.update],
-            custom_expr=lambda x: sql.column("owner_id") == x,
-            custom_policy_name="equal_to_accountId_policy",
+            cmd=policy.Command.all,
         ),
-        schemas.Permissive(
+        policy.Policy.from_sqla(
+            expr=lambda x: sql.column("owner_id") > x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.select],
-            custom_expr=lambda x: sql.column("owner_id") > x,
-            custom_policy_name="greater_than_accountId_policy",
+            cmd=policy.Command.select,
         ),
-        schemas.Permissive(
+        policy.Policy.from_sqla(
+            expr=lambda x: sql.column("owner_id") <= x,
             condition_args=[
-                schemas.ConditionArg(
+                policy.ConditionArg(
                     comparator_name="account_id", type=sqlalchemy.Integer
                 ),
             ],
-            cmd=[schemas.Command.all],
-            custom_expr=lambda x: sql.column("owner_id") <= x,
-            custom_policy_name="smaller_than_or_equal_accountId_policy",
+            cmd=policy.Command.all,
         ),
     ]
 

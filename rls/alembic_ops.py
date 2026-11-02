@@ -5,8 +5,7 @@ from alembic import autogenerate
 from alembic import operations as alembic_operations
 from sqlalchemy.dialects import postgresql as pg_dialect
 
-from . import _sql_gen
-from . import schemas
+from . import policy
 
 
 @alembic_operations.Operations.register_operation("enable_rls")
@@ -78,10 +77,9 @@ class RLSOp(typing.Protocol):
         self,
         table_name: str,
         policy_name: str,
-        definition: str,
+        policy_type: str,
         cmd: str,
         expr: str,
-        allow_bypass_rls: bool = True,
         **kw: typing.Any,
     ) -> None: ...
 
@@ -89,7 +87,7 @@ class RLSOp(typing.Protocol):
         self,
         table_name: str,
         policy_name: str,
-        definition: str,
+        policy_type: str,
         cmd: str,
         expr: str,
         **kw: typing.Any,
@@ -114,7 +112,7 @@ def render_disable_rls(autogen_context, op):
     return f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r})"
 
 
-def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
+def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     query: sa.Select = (
@@ -125,24 +123,16 @@ def check_rls_policies(conn, schemaname, tablename) -> list[schemas.Policy]:
     )
     result = conn.execute(query).fetchall()
 
-    # Convert query result to a list of Policy objects
     policies = []
     for row in result:
         policy_data = dict(zip(columns, row))
-
-        # Map the database fields to Policy attributes
-        policy = schemas.Policy(
-            definition=policy_data.get("permissive", ""),
-            cmd=policy_data.get("cmd", ""),
-            custom_policy_name=policy_data.get("policyname", ""),
+        p = policy.Policy(
+            name=policy_data["policyname"],
+            cmd=policy.Command(policy_data["cmd"]),
+            expr=policy_data.get("with_check") or policy_data.get("qual") or "",
+            policy_type=policy.PolicyType(policy_data["permissive"]),
         )
-
-        # Set the expression (or any other additional fields) as needed
-        policy.expression = policy_data.get("with_check", "") or policy_data.get(
-            "qual", ""
-        )
-
-        policies.append(policy)
+        policies.append(p)
 
     return policies
 
@@ -170,9 +160,9 @@ def check_rls_enabled(conn, schemaname, tablename) -> bool:
     return result
 
 
-def _cmd_value(cmd: schemas.Command | str) -> str:
+def _cmd_value(cmd: policy.Command | str) -> str:
     """Return the plain string value of a Command enum member or a plain string."""
-    return cmd.value if isinstance(cmd, schemas.Command) else cmd
+    return cmd.value if isinstance(cmd, policy.Command) else cmd
 
 
 @autogenerate.comparators.dispatch_for("table")
@@ -205,46 +195,38 @@ def compare_table_level(
         modify_ops.ops.append(DisableRlsOp(tablename=tablename, schemaname=schemaname))
 
     # STEP 5. Compare policies by name. Policy names embed a hash of the
-    # generated policy SQL, so any change to a policy produces a new name.
+    # policy definition, so any change to a policy produces a new name.
     # Postgres rewrites stored policy expressions, so comparing expression
     # strings directly is unreliable.
-    db_policy_names = {p.custom_policy_name for p in rls_policies_db}
+    db_policy_names = {p.name for p in rls_policies_db}
     all_metadata_policy_names: set[str] = set()
     create_ops: list[CreatePolicyOp] = []
-    for idx, policy_meta in enumerate(rls_policies_meta):
-        policy_meta.get_sql_policies(table_name=tablename, name_suffix=str(idx))
-        all_metadata_policy_names.update(policy_meta.policy_names)
-        policy_expr = policy_meta.expression
-        for ix, single_policy_name in enumerate(policy_meta.policy_names):
-            if single_policy_name in db_policy_names:
-                continue
-            if isinstance(policy_meta.cmd, list):
-                current_cmd = _cmd_value(policy_meta.cmd[ix])
-            else:
-                current_cmd = _cmd_value(policy_meta.cmd)
-            # Policy exists in metadata but not in the database, so create it
-            create_ops.append(
-                CreatePolicyOp(
-                    table_name=tablename,
-                    definition=policy_meta.definition,
-                    policy_name=single_policy_name,
-                    cmd=current_cmd,
-                    expr=policy_expr,
-                    allow_bypass_rls=policy_meta.allow_bypass_rls,
-                )
+    for policy_meta in rls_policies_meta:
+        all_metadata_policy_names.add(policy_meta.name)
+        if policy_meta.name in db_policy_names:
+            continue
+        # Policy exists in metadata but not in the database, so create it
+        create_ops.append(
+            CreatePolicyOp(
+                table_name=tablename,
+                policy_type=policy_meta.policy_type.value,
+                policy_name=policy_meta.name,
+                cmd=_cmd_value(policy_meta.cmd),
+                expr=policy_meta.expr,
             )
+        )
 
     # Step 6. Drop policies in the database that are not in the metadata
     # (including outdated versions of changed policies) before creating new ones.
     for policy_db in rls_policies_db:
-        if policy_db.custom_policy_name not in all_metadata_policy_names:
+        if policy_db.name not in all_metadata_policy_names:
             modify_ops.ops.append(
                 DropPolicyOp(
                     table_name=tablename,
-                    definition=policy_db.definition,
-                    policy_name=policy_db.custom_policy_name,
-                    cmd=policy_db.cmd.value,
-                    expr=policy_db.expression,
+                    policy_type=policy_db.policy_type.value,
+                    policy_name=policy_db.name,
+                    cmd=_cmd_value(policy_db.cmd),
+                    expr=policy_db.expr,
                 )
             )
     modify_ops.ops.extend(create_ops)
@@ -254,20 +236,17 @@ def compare_table_level(
 class CreatePolicyOp(alembic_operations.MigrateOperation):
     """Operation to create a new RLS policy."""
 
-    def __init__(
-        self, table_name, policy_name, definition, cmd, expr, allow_bypass_rls=True
-    ):
+    def __init__(self, table_name, policy_name, policy_type, cmd, expr):
         self.table_name = table_name
-        self.definition = definition
+        self.policy_type = policy_type
         self.cmd = cmd
         self.expr = expr
         self.policy_name = policy_name
-        self.allow_bypass_rls = allow_bypass_rls
 
     @classmethod
-    def create_policy(cls, operations, table_name, definition, cmd, expr, **kw):
+    def create_policy(cls, operations, table_name, policy_type, cmd, expr, **kw):
         op = CreatePolicyOp(
-            table_name=table_name, definition=definition, cmd=cmd, expr=expr, **kw
+            table_name=table_name, policy_type=policy_type, cmd=cmd, expr=expr, **kw
         )
         return operations.invoke(op)
 
@@ -275,31 +254,34 @@ class CreatePolicyOp(alembic_operations.MigrateOperation):
         return DropPolicyOp(
             table_name=self.table_name,
             policy_name=self.policy_name,
-            definition=self.definition,
+            policy_type=self.policy_type,
             cmd=self.cmd,
             expr=self.expr,
         )
+
+    def to_diff_tuple(self) -> tuple:
+        return ("create_policy", self.table_name, self.policy_name)
 
 
 @alembic_operations.Operations.register_operation("drop_policy")
 class DropPolicyOp(alembic_operations.MigrateOperation):
     """Operation to drop an RLS policy."""
 
-    def __init__(self, table_name, policy_name, definition, cmd, expr):
+    def __init__(self, table_name, policy_name, policy_type, cmd, expr):
         self.table_name = table_name
-        self.definition = definition
+        self.policy_type = policy_type
         self.cmd = cmd
         self.expr = expr
         self.policy_name = policy_name
 
     @classmethod
     def drop_policy(
-        cls, operations, table_name, policy_name, definition, cmd, expr, **kw
+        cls, operations, table_name, policy_name, policy_type, cmd, expr, **kw
     ):
         op = DropPolicyOp(
             table_name=table_name,
             policy_name=policy_name,
-            definition=definition,
+            policy_type=policy_type,
             cmd=cmd,
             expr=expr,
             **kw,
@@ -307,36 +289,27 @@ class DropPolicyOp(alembic_operations.MigrateOperation):
         return operations.invoke(op)
 
     def reverse(self):
-        # You need the original policy metadata to recreate it, so this part is context-dependent.
         return CreatePolicyOp(
             table_name=self.table_name,
             policy_name=self.policy_name,
-            definition=self.definition,
+            policy_type=self.policy_type,
             cmd=self.cmd,
             expr=self.expr,
         )
 
+    def to_diff_tuple(self) -> tuple:
+        return ("drop_policy", self.table_name, self.policy_name)
+
 
 @alembic_operations.Operations.implementation_for(CreatePolicyOp)
 def create_policy(operations, operation):
-    table_name = operation.table_name
-    policy_name = operation.policy_name
-    definition = operation.definition
-    cmd = operation.cmd
-    expr = operation.expr
-    allow_bypass_rls = operation.allow_bypass_rls
-
-    # Generate the SQL to create the policy
-    sql = _sql_gen.generate_rls_policy(
-        cmd=cmd,
-        definition=definition,
-        policy_name=policy_name,
-        table_name=table_name,
-        expr=expr,
-        allow_bypass_rls=allow_bypass_rls,
+    p = policy.Policy(
+        name=operation.policy_name,
+        cmd=policy.Command(operation.cmd),
+        expr=operation.expr,
+        policy_type=policy.PolicyType(operation.policy_type),
     )
-
-    operations.execute(sql)
+    operations.execute(p.render_policy(operation.table_name))
 
 
 @alembic_operations.Operations.implementation_for(DropPolicyOp)
@@ -351,8 +324,7 @@ def render_create_policy(autogen_context, op):
     return (
         f"typing.cast(alembic_ops.RLSOp, op).create_policy("
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r}, "
-        f"allow_bypass_rls={op.allow_bypass_rls!r})"
+        f"cmd={op.cmd!r}, policy_type={op.policy_type!r}, expr={op.expr!r})"
     )
 
 
@@ -362,5 +334,5 @@ def render_drop_policy(autogen_context, op):
     return (
         f"typing.cast(alembic_ops.RLSOp, op).drop_policy("
         f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, definition={op.definition!r}, expr={op.expr!r})"
+        f"cmd={op.cmd!r}, policy_type={op.policy_type!r}, expr={op.expr!r})"
     )

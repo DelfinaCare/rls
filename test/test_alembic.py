@@ -9,6 +9,7 @@ from alembic import config as alembic_config
 from alembic.runtime import migration
 
 from rls import alembic_ops
+from rls import policy
 from test import expectations
 from test import models
 
@@ -61,7 +62,7 @@ class TestAlembicOperations(unittest.TestCase):
                 self.connection.execute(
                     sqlalchemy.text(
                         """
-                SELECT policyname, permissive, qual, with_check, cmd
+                SELECT tablename, policyname, permissive, qual, with_check, cmd
                 FROM pg_policies
                 WHERE tablename IN ('items', 'users');
                 """
@@ -71,24 +72,24 @@ class TestAlembicOperations(unittest.TestCase):
                 .fetchall()
             )
 
-            self.assertTrue(len(policies) == 6, "Expected 6 policies to be created")
+            self.assertTrue(len(policies) == 4, "Expected 4 policies to be created")
 
-            for policy in expectations.EXPECTED_POLICIES:
+            for expected in expectations.EXPECTED_POLICIES:
                 matched_policy = next(
-                    (p for p in policies if p["policyname"] == policy["policyname"]),
+                    (p for p in policies if p["policyname"] == expected["policyname"]),
                     None,
                 )
 
                 self.assertIsNotNone(
                     matched_policy,
-                    f"Expected policy '{policy['policyname']}' to exist.",
+                    f"Expected policy '{expected['policyname']}' to exist.",
                 )
 
-                for key, value in policy.items():
+                for key, value in expected.items():
                     self.assertEqual(
                         matched_policy[key],
                         value,
-                        f"Expected policy '{policy['policyname']}' to have '{key}'='{value}'.",
+                        f"Expected policy '{expected['policyname']}' to have '{key}'='{value}'.",
                     )
 
     def test_no_spurious_diffs_after_migration(self):
@@ -146,19 +147,25 @@ class TestAlembicOperations(unittest.TestCase):
     def test_policy_rename(self):
         """Renaming a policy in metadata drops the old policy and creates the new one."""
         self._autogenerate_and_upgrade("ensure policies exist")
-        policy = models.Item.__rls_policies__[1]
-        old_name = policy.custom_policy_name
-        policy.get_sql_policies(table_name="items", name_suffix="1")
-        [old_policy_name] = policy.policy_names
+        old_policy = models.Item.__rls_policies__[1]
+        old_policy_name = old_policy.name
         self.assertIn(old_policy_name, self._policy_names("items"))
 
+        new_policy = policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.sql.column("owner_id") > x,
+            condition_args=[
+                policy.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=policy.Command.select,
+            name="renamed_policy",
+        )
+        new_policy_name = new_policy.name
+        self.assertTrue(new_policy_name.startswith("renamed_policy_"))
+
         try:
-            policy.custom_policy_name = "renamed_policy"
-            policy.get_sql_policies(table_name="items", name_suffix="1")
-            [new_policy_name] = policy.policy_names
-            self.assertTrue(
-                new_policy_name.startswith("items_renamed_policy_select_1_")
-            )
+            models.Item.__rls_policies__[1] = new_policy
 
             dropped, created = self._pending_policy_ops()
             self.assertEqual(dropped, [old_policy_name])
@@ -170,7 +177,7 @@ class TestAlembicOperations(unittest.TestCase):
             self.assertNotIn(old_policy_name, names)
             self.assertEqual(self._pending_policy_ops(), ([], []))
         finally:
-            policy.custom_policy_name = old_name
+            models.Item.__rls_policies__[1] = old_policy
             self._autogenerate_and_upgrade("restore policy name")
 
         names = self._policy_names("items")
@@ -183,16 +190,15 @@ class TestAlembicOperations(unittest.TestCase):
         expected_names = {
             p["policyname"]
             for p in expectations.EXPECTED_POLICIES
-            if p["policyname"].startswith("users_")
+            if p["tablename"] == "users"
         }
         self.assertEqual(self._policy_names("users"), expected_names)
 
         # Simulate a database created before policy names carried a hash.
         legacy_names = set()
         with self.admin_engine.begin() as conn:
-            for name in expected_names:
-                cmd = "select" if "_select_" in name else "update"
-                legacy_name = f"users_equal_to_accountid_policy_{cmd}_policy_0"
+            for ix, name in enumerate(sorted(expected_names)):
+                legacy_name = f"users_equal_to_accountid_policy_all_policy_{ix}"
                 legacy_names.add(legacy_name)
                 conn.execute(
                     sqlalchemy.text(

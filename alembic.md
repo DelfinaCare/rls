@@ -26,24 +26,24 @@ To create a policy in alembic revision `manually` you have to keep in mind the f
 
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
 
-**Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy's generated SQL (e.g. `users_my_policy_select_0_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
+**Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy definition (e.g. `permissive_account_id_select_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
 
-### op.create_policy(table_name: str, policy_name: str, cmd: str, expr: str)
-Creates a policy for a table with the given name, definition, policy name, command, and expression
+### op.create_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str)
+Creates a policy for a table with the given name, policy type, policy name, command, and expression. The expression is used as-is, so any `rls.bypass_rls` clause must already be part of it.
 
 ```python
 from alembic import op
 
 op.create_policy(
     table_name="accounts",
-    definition="PERMISSIVE",
+    policy_type="PERMISSIVE",
     policy_name="accounts_select",
-    cmd="select",
+    cmd="SELECT",
     expr="true",
 )
 ```
 
-### op.drop_policy(table_name: str, policy_name: str, cmd: str, expr: str)
+### op.drop_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str)
 Drops a policy for a table with the given name, policy name, command, and expression
 
 ```python
@@ -51,14 +51,14 @@ from alembic import op
 
 op.drop_policy(
     table_name="accounts",
-    definition="PERMISSIVE",
+    policy_type="PERMISSIVE",
     policy_name="accounts_select",
-    cmd="select",
+    cmd="SELECT",
     expr="true",
 )
 ```
 
-**Note**: the `expr`, `cmd`, `definition` are not used in the drop operation but it is required to be passed for reverse compatibility
+**Note**: the `expr`, `cmd`, `policy_type` are not used in the drop operation but it is required to be passed for reverse compatibility
 
 
 ### op.enable_rls(table_name: str)
