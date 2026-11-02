@@ -65,31 +65,27 @@ def _unsupported_field_error(
     )
 
 
-def _annotation_leaves(annotation: object) -> list[object]:
-    """Flattens ``Optional``/``Union``/``Literal`` annotations into the list
-    of types (or literal values) a field can hold."""
+def _annotation_types(annotation: object) -> list[object]:
+    """Flattens ``Optional``/``Union`` annotations into the list of types a
+    field can hold."""
     origin = typing.get_origin(annotation)
-    if origin is typing.Union or origin is types.UnionType or origin is typing.Literal:
+    if origin is typing.Union or origin is types.UnionType:
         return [
             leaf
             for arg in typing.get_args(annotation)
-            for leaf in ([arg] if origin is typing.Literal else _annotation_leaves(arg))
+            for leaf in _annotation_types(arg)
         ]
     return [annotation]
 
 
-def _is_supported_leaf(leaf: object) -> bool:
-    if leaf is None or leaf is type(None):
+def _is_supported_type(type_: object) -> bool:
+    if type_ is type(None):
         return True
-    if isinstance(leaf, enum.Enum):
-        return isinstance(leaf.value, (str, int))
-    if isinstance(leaf, (str, int)):
-        return True
-    if not isinstance(leaf, type):
+    if not isinstance(type_, type):
         return False
-    if issubclass(leaf, enum.Enum):
-        return all(isinstance(member.value, (str, int)) for member in leaf)
-    return issubclass(leaf, _SUPPORTED_SCALAR_TYPES)
+    if issubclass(type_, enum.Enum):
+        return all(isinstance(member.value, (str, int)) for member in type_)
+    return issubclass(type_, _SUPPORTED_SCALAR_TYPES)
 
 
 def _value_renderer(
@@ -97,13 +93,12 @@ def _value_renderer(
 ) -> _ValueRenderer:
     """Validates a context field's annotation and returns the function that
     renders its values as the text passed to ``set_config``."""
-    leaves = _annotation_leaves(annotation)
-    if not all(_is_supported_leaf(leaf) for leaf in leaves):
+    field_types = _annotation_types(annotation)
+    if not all(_is_supported_type(type_) for type_ in field_types):
         raise _unsupported_field_error(model, key, annotation)
     if any(
-        isinstance(leaf, enum.Enum)
-        or (isinstance(leaf, type) and issubclass(leaf, enum.Enum))
-        for leaf in leaves
+        isinstance(type_, type) and issubclass(type_, enum.Enum)
+        for type_ in field_types
     ):
         return _render_enum
     return _render_scalar

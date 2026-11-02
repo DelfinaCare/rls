@@ -58,7 +58,6 @@ class ContextSerializationTests(unittest.TestCase):
             flag: bool
             name: str
             count: int
-            literal: typing.Literal["a", "b"]
 
         uid = uuid.UUID("12345678-1234-5678-1234-567812345678")
         when = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
@@ -70,7 +69,6 @@ class ContextSerializationTests(unittest.TestCase):
             flag=True,
             name="x",
             count=7,
-            literal="a",
         )
         self.assertEqual(
             _params(context),
@@ -82,7 +80,6 @@ class ContextSerializationTests(unittest.TestCase):
                 "value_flag": "True",
                 "value_name": "x",
                 "value_count": "7",
-                "value_literal": "a",
             },
         )
 
@@ -121,11 +118,11 @@ class ContextValidationTests(unittest.TestCase):
 
         self._assert_rejected(Inner)
 
-    def test_literal_enum_member_serialized_by_value(self):
-        class Context(pydantic.BaseModel):
-            role: typing.Literal[Role.admin] | None
+    def test_literal_rejected(self):
+        self._assert_rejected(typing.Literal["a", "b"])
 
-        self.assertEqual(_params(Context(role=Role.admin)), {"value_role": "admin"})
+    def test_optional_literal_rejected(self):
+        self._assert_rejected(typing.Literal[Role.admin] | None)
 
     def test_enum_with_non_scalar_values_rejected(self):
         self._assert_rejected(TupleEnum)
