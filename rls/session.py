@@ -1,10 +1,4 @@
-import datetime
-import decimal
-import enum
-import functools
-import types
 import typing
-import uuid
 from collections import abc
 
 import pydantic
@@ -13,179 +7,7 @@ from sqlalchemy import event
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-
-def _is_context_immutable(context: pydantic.BaseModel | None) -> bool:
-    if context is None:
-        return True
-    model_config = getattr(type(context), "model_config", None)
-    if model_config is None:
-        return False
-    return bool(model_config.get("frozen"))
-
-
-# Scalar types whose ``str()`` is a text representation PostgreSQL can cast
-# back to the matching column type in a policy expression.  Enums are handled
-# separately: they are serialized by their ``.value``.
-_SUPPORTED_SCALAR_TYPES: tuple[type, ...] = (
-    str,
-    int,
-    float,
-    bool,
-    decimal.Decimal,
-    uuid.UUID,
-    datetime.datetime,
-    datetime.date,
-    datetime.time,
-)
-
-
-_ValueRenderer = abc.Callable[[object], str]
-_RenderValues = abc.Callable[[pydantic.BaseModel | None], dict[str, str]]
-
-
-# None is stored as an empty string, which policies turn back into NULL.
-def _render_scalar(value: object) -> str:
-    return "" if value is None else str(value)
-
-
-def _render_enum(value: object) -> str:
-    if isinstance(value, enum.Enum):
-        value = value.value
-    return _render_scalar(value)
-
-
-def _unsupported_field_error(
-    model: type[pydantic.BaseModel], key: str, annotation: object
-) -> TypeError:
-    return TypeError(
-        f"Unsupported type {annotation!r} for RLS context field "
-        f"{model.__name__}.{key}. Supported types are str, int, float, bool, "
-        "Decimal, UUID, datetime, date, time, enums with str or int values, "
-        "and Optional/Union combinations of these."
-    )
-
-
-def _annotation_types(annotation: object) -> list[object]:
-    """Flattens ``Optional``/``Union`` annotations into the list of types a
-    field can hold."""
-    origin = typing.get_origin(annotation)
-    if origin is typing.Union or origin is types.UnionType:
-        return [
-            leaf
-            for arg in typing.get_args(annotation)
-            for leaf in _annotation_types(arg)
-        ]
-    return [annotation]
-
-
-def _is_supported_type(type_: object) -> bool:
-    if type_ is type(None):
-        return True
-    if not isinstance(type_, type):
-        return False
-    if issubclass(type_, enum.Enum):
-        return all(isinstance(member.value, (str, int)) for member in type_)
-    return issubclass(type_, _SUPPORTED_SCALAR_TYPES)
-
-
-def _value_renderer(
-    model: type[pydantic.BaseModel], key: str, annotation: object
-) -> _ValueRenderer:
-    """Validates a context field's annotation and returns the function that
-    renders its values as the text passed to ``set_config``."""
-    field_types = _annotation_types(annotation)
-    if not all(_is_supported_type(type_) for type_ in field_types):
-        raise _unsupported_field_error(model, key, annotation)
-    if any(
-        isinstance(type_, type) and issubclass(type_, enum.Enum)
-        for type_ in field_types
-    ):
-        return _render_enum
-    return _render_scalar
-
-
-@functools.cache
-def _render_values_function(model: type[pydantic.BaseModel]) -> _RenderValues:
-    """
-    Pre-computes, at init time, the function that renders a context's field
-    values into the bind parameters of the ``set_config`` statement template.
-
-    Raises :class:`TypeError` if any field of ``model`` cannot be rendered to a
-    value that RLS policy expressions can cast.
-    """
-    renderers = {
-        f"value_{key}": (key, _value_renderer(model, key, field.annotation))
-        for key, field in model.model_fields.items()
-    }
-
-    def render_values(context: pydantic.BaseModel | None) -> dict[str, str]:
-        if context is None:
-            return {}
-        return {
-            param: render(getattr(context, key))
-            for param, (key, render) in renderers.items()
-        }
-
-    return render_values
-
-
-def _render_no_values(context: pydantic.BaseModel | None) -> dict[str, str]:
-    return {}
-
-
-_BYPASS_STATEMENT = sqlalchemy.select(
-    sqlalchemy.func.set_config(
-        sqlalchemy.literal("rls.bypass_rls"),
-        sqlalchemy.literal("true"),
-        sqlalchemy.true(),
-    )
-)
-
-
-@functools.cache
-def _set_statement_template(
-    model: type[pydantic.BaseModel] | None,
-) -> sqlalchemy.StatementLambdaElement:
-    """
-    Pre-computes, at init time, the SQL template for setting RLS config values
-    for a context class (``None`` when the session has no context).
-
-    All values are set transaction-locally (``is_local => true``), so they are
-    discarded at the end of the transaction and never leak to other users of a
-    pooled connection.
-
-    The SQLAlchemy select() expression with literal setting names and named
-    bind parameters for the values is built once and stored.  Each call to
-    _pending_rls_statements() then only needs to substitute the current field
-    values into this template, which is significantly cheaper than rebuilding
-    the entire statement every time.
-
-    The template is wrapped in SQLAlchemy's lambda statement infrastructure so
-    the statement construction and its compilation are cached; only the bound
-    values need to be supplied at execution time.
-    """
-    keys = list(model.model_fields.keys()) if model is not None else []
-    set_config_calls = [
-        sqlalchemy.func.set_config(
-            sqlalchemy.literal("rls.bypass_rls"),
-            sqlalchemy.literal("false"),
-            sqlalchemy.true(),
-        )
-    ]
-    for key in keys:
-        if key == "bypass_rls":
-            raise ValueError("Context field names cannot be 'bypass_rls'")
-        # Bind parameters are named after the field (e.g. setting_account_id,
-        # value_account_id) so the mapping is explicit and not order-dependent.
-        set_config_calls.append(
-            sqlalchemy.func.set_config(
-                sqlalchemy.literal(f"rls.{key}"),
-                sqlalchemy.bindparam(f"value_{key}"),
-                sqlalchemy.true(),
-            )
-        )
-    template = sqlalchemy.select(*set_config_calls)
-    return sqlalchemy.lambda_stmt(lambda: template)
+from rls import session_context
 
 
 class _RlsSessionState:
@@ -213,15 +35,17 @@ class _RlsSessionState:
         # Re-entrancy guard: _rls_sync() itself executes statements.
         self._rls_syncing = False
         self._context = context
-        self._rls_context_is_immutable = _is_context_immutable(context)
+        self._rls_context_is_immutable = session_context.is_context_immutable(context)
         # The statement template and the function rendering the current field
         # values into its bind params are each built (and validated) once per
         # context class.
-        self._rls_set_statement = _set_statement_template(
+        self._rls_set_statement = session_context.set_statement_template(
             type(context) if context else None
         )
-        self._rls_render_values: _RenderValues = (
-            _render_values_function(type(context)) if context else _render_no_values
+        self._rls_render_values: session_context.RenderValues = (
+            session_context.render_values_function(type(context))
+            if context
+            else session_context.render_no_values
         )
 
     def _rls_needs_apply(self) -> bool:
@@ -245,7 +69,7 @@ class _RlsSessionState:
         filter out all rows.
         """
         if self._rls_bypass_depth > 0:
-            return _BYPASS_STATEMENT, {}
+            return session_context.BYPASS_STATEMENT, {}
         self._rls_last_set_context_snapshot = (
             self._context.model_copy(deep=True) if self._context else None
         )
