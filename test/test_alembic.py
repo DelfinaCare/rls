@@ -542,6 +542,46 @@ class TestAlembicOperations(unittest.TestCase):
         self.assertEqual(self._pending_policy_ops(), ([], []))
         self.assertEqual(self._pending_enable_ops(), [])
 
+    def test_migrating_external_policies(self):
+        """Hand-written policies can be adopted as external policies, then
+        rewritten as native policies one at a time."""
+        self._autogenerate_and_upgrade("ensure policies exist")
+        native_names = self._policy_names("items")
+        with self.admin_engine.begin() as conn:
+            conn.execute(
+                sqlalchemy.text(
+                    'CREATE POLICY "Legacy Policy" ON items FOR SELECT USING (true)'
+                )
+            )
+        self.addCleanup(self._autogenerate_and_upgrade, "drop legacy policy")
+
+        # Phase 1: generation is suppressed, so nothing would be dropped.
+        with mock.patch.dict(os.environ, {"RLS_SUPPRESS_ALEMBIC_GENERATION": "1"}):
+            self.assertEqual(self._pending_policy_ops(), ([], []))
+        self.assertEqual(self._pending_policy_ops(), (["Legacy Policy"], []))
+
+        # Phase 2: declaring the policy as external results in no diff.
+        item_policies = models.Item.__rls_policies__
+        original_policies = list(item_policies)
+        self.addCleanup(item_policies.__setitem__, slice(None), original_policies)
+        item_policies.append(policy.ExternalPolicy(name="Legacy Policy"))
+        self.assertEqual(self._pending_policy_ops(), ([], []))
+        self._autogenerate_and_upgrade("adopt legacy policy")
+        self.assertEqual(self._policy_names("items"), native_names | {"Legacy Policy"})
+
+        # Phase 3: rewriting the external policy as a native one replaces it.
+        native = policy.Policy.from_sqla(
+            expr=lambda: sqlalchemy.true(),
+            condition_args=[],
+            cmd=policy.Command.select,
+            name="legacy",
+        )
+        item_policies[-1] = native
+        self.assertEqual(self._pending_policy_ops(), (["Legacy Policy"], [native.name]))
+        self._autogenerate_and_upgrade("rewrite legacy policy")
+        self.assertEqual(self._policy_names("items"), native_names | {native.name})
+        self.assertEqual(self._pending_policy_ops(), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()

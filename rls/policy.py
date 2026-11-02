@@ -202,3 +202,19 @@ class Policy(pydantic.BaseModel):
         # Escape colons so that quoted identifiers are not parsed as bind params.
         header = header.replace(":", "\\:")
         return sqlalchemy.text(f"{header} {clauses}")
+
+
+class ExternalPolicy(pydantic.BaseModel):
+    """A row-level security policy managed outside of this package.
+
+    List an ``ExternalPolicy`` in a model's ``__rls_policies__`` to declare
+    that a policy with this name already exists on the table and is managed
+    elsewhere (e.g. by hand-written migrations).  Alembic autogenerate will
+    neither create nor drop it, and ``rls.create_policies`` skips it.  This
+    allows an existing RLS codebase to be migrated to this package one policy
+    at a time.
+
+    ``name`` must match the policy name stored in Postgres exactly.
+    """
+
+    name: str

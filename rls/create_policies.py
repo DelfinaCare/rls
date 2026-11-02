@@ -42,8 +42,10 @@ def create_policies(
                 f"ALTER TABLE {quoted_table} FORCE ROW LEVEL SECURITY;"
             )
             connection.execute(stmt)
-        # policies
+        # policies (external policies are managed elsewhere)
         for policy in rls_settings:
+            if isinstance(policy, policy_module.ExternalPolicy):
+                continue
             connection.execute(
                 policy.render_policy(table_name=tablename, schemaname=schemaname)
             )

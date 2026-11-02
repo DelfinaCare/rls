@@ -151,6 +151,14 @@ class TestCreatePolicies(unittest.TestCase):
         self.assertTrue(any('ON "user"' in s for s in executed_sqls))
         self.assertTrue(any('ON "MySchema"."Docs"' in s for s in executed_sqls))
 
+    def test_external_policies_are_skipped(self):
+        Base = _make_base_with_policies(
+            {"my_table": [policy.ExternalPolicy(name="legacy_policy")]}
+        )
+        executed_sqls = self._executed_sqls(Base)
+        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertFalse(any("CREATE POLICY" in s for s in executed_sqls))
+
 
 if __name__ == "__main__":
     unittest.main()

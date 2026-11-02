@@ -1,3 +1,4 @@
+import os
 import typing
 
 import sqlalchemy as sa
@@ -5,6 +6,20 @@ from alembic import autogenerate
 from alembic import operations as alembic_operations
 
 from . import policy
+
+SUPPRESS_ALEMBIC_GENERATION_ENV_VAR = "RLS_SUPPRESS_ALEMBIC_GENERATION"
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def alembic_generation_suppressed() -> bool:
+    """Return whether RLS alembic autogenerate is disabled by the environment.
+
+    Set ``RLS_SUPPRESS_ALEMBIC_GENERATION`` to ``1``, ``true``, ``yes`` or
+    ``on`` (case-insensitive) to stop autogenerate from emitting any RLS
+    operations, e.g. while migrating an existing RLS codebase.
+    """
+    value = os.environ.get(SUPPRESS_ALEMBIC_GENERATION_ENV_VAR, "")
+    return value.strip().lower() in _TRUTHY_ENV_VALUES
 
 
 @alembic_operations.Operations.register_operation("enable_rls")
@@ -228,6 +243,8 @@ def compare_table_level(
     if metadata_table is None:
         # The table is being dropped, which also drops its policies.
         return
+    if alembic_generation_suppressed():
+        return
 
     # STEP 1. check if the table exists
     table_exists = check_table_exists(autogen_context.connection, schemaname, tablename)
@@ -280,12 +297,15 @@ def compare_table_level(
     # STEP 5. Compare policies by name. Policy names embed a hash of the
     # policy definition, so any change to a policy produces a new name.
     # Postgres rewrites stored policy expressions, so comparing expression
-    # strings directly is unreliable.
+    # strings directly is unreliable.  External policies are managed
+    # elsewhere, so they are never created, but are kept if they exist.
     db_policy_names = {p.name for p in rls_policies_db}
     all_metadata_policy_names: set[str] = set()
     create_ops: list[CreatePolicyOp] = []
     for policy_meta in rls_policies_meta:
         all_metadata_policy_names.add(policy_meta.name)
+        if isinstance(policy_meta, policy.ExternalPolicy):
+            continue
         if policy_meta.name in db_policy_names:
             continue
         # Policy exists in metadata but not in the database, so create it
