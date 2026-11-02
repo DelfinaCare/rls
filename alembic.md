@@ -63,15 +63,18 @@ op.drop_policy(
 **Note**: the `expr`, `cmd`, `policy_type` are not used in the drop operation but it is required to be passed for reverse compatibility
 
 
-### op.enable_rls(tablename: str, schemaname: str | None = None)
+### op.enable_rls(tablename: str, schemaname: str | None = None, force: bool = True)
 Enables and forces row level security on a table with the given name (`ENABLE ROW LEVEL SECURITY` followed by `FORCE ROW LEVEL SECURITY`). Forcing RLS means the table owner, which is usually the role that runs migrations and often the role the application connects as, is also subject to the policies.
 
-Autogenerate also emits `op.enable_rls` for tables that have RLS enabled but not forced, for example tables migrated with an older version of this package.
+With `force=False` RLS is enabled but not forced (`ENABLE ROW LEVEL SECURITY` followed by `NO FORCE ROW LEVEL SECURITY`), so the table owner bypasses the policies. Autogenerate uses this for models with `__rls_mode__ = RlsMode.enable`.
+
+Autogenerate also emits `op.enable_rls` for tables whose `FORCE` setting does not match the model's `__rls_mode__`, for example tables migrated with an older version of this package, which enabled RLS without forcing it.
 
 ```python
 from alembic import op
 
 op.enable_rls("accounts")
+op.enable_rls("audit_log", force=False)
 ```
 
 ### op.disable_rls(tablename: str, schemaname: str | None = None)

@@ -9,11 +9,12 @@ from . import policy
 
 @alembic_operations.Operations.register_operation("enable_rls")
 class EnableRlsOp(alembic_operations.MigrateOperation):
-    """Enable RowLevelSecurity."""
+    """Enable RowLevelSecurity, forcing it unless ``force`` is False."""
 
-    def __init__(self, tablename, schemaname=None):
+    def __init__(self, tablename, schemaname=None, force=True):
         self.tablename = tablename
         self.schemaname = schemaname
+        self.force = force
 
     @classmethod
     def enable_rls(cls, operations, tablename, **kw):
@@ -53,7 +54,10 @@ def enable_rls(operations, operation):
     operations.execute(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY")
     # Table owners bypass RLS unless it is forced.  Migrations usually run as
     # the table owner, which is often the same role the application uses.
-    operations.execute(f"ALTER TABLE {name} FORCE ROW LEVEL SECURITY")
+    if operation.force:
+        operations.execute(f"ALTER TABLE {name} FORCE ROW LEVEL SECURITY")
+    else:
+        operations.execute(f"ALTER TABLE {name} NO FORCE ROW LEVEL SECURITY")
 
 
 @alembic_operations.Operations.implementation_for(DisableRlsOp)
@@ -70,7 +74,13 @@ class RLSOp(typing.Protocol):
     access to these operations without ``# type: ignore`` suppressions.
     """
 
-    def enable_rls(self, tablename: str, **kw: typing.Any) -> None: ...
+    def enable_rls(
+        self,
+        tablename: str,
+        schemaname: str | None = None,
+        force: bool = True,
+        **kw: typing.Any,
+    ) -> None: ...
 
     def disable_rls(self, tablename: str, **kw: typing.Any) -> None: ...
 
@@ -112,7 +122,8 @@ def render_enable_rls(autogen_context, op):
     _add_rls_imports(autogen_context)
     return (
         f"typing.cast(alembic_ops.RLSOp, op).enable_rls({op.tablename!r}"
-        f"{_render_schemaname(op.schemaname)})"
+        f"{_render_schemaname(op.schemaname)}"
+        f"{'' if op.force else ', force=False'})"
     )
 
 
@@ -233,12 +244,22 @@ def compare_table_level(
         _qualified_name(tablename, schemaname), []
     )
     rls_enabled_meta = bool(rls_policies_meta)
+    rls_mode_meta = policy.RlsMode(
+        metadata_table.metadata.info.get("rls_modes", {}).get(
+            _qualified_name(tablename, schemaname), policy.DEFAULT_RLS_MODE
+        )
+    )
+    rls_forced_meta = rls_mode_meta == policy.RlsMode.enable_and_force
 
-    # STEP 4. Enable or disable RLS on the table if needed.  Tables enabled
-    # without FORCE (e.g. by older versions of this package) are re-enabled
-    # so that RLS also applies to the table owner.
-    if rls_enabled_meta and not (rls_enabled_db and rls_forced_db):
-        modify_ops.ops.append(EnableRlsOp(tablename=tablename, schemaname=schemaname))
+    # STEP 4. Enable or disable RLS on the table if needed.  Tables whose
+    # FORCE setting does not match the configured mode (e.g. tables enabled
+    # without FORCE by older versions of this package) are re-enabled.
+    if rls_enabled_meta and not (rls_enabled_db and rls_forced_db == rls_forced_meta):
+        modify_ops.ops.append(
+            EnableRlsOp(
+                tablename=tablename, schemaname=schemaname, force=rls_forced_meta
+            )
+        )
     if rls_enabled_db and not rls_enabled_meta:
         modify_ops.ops.append(DisableRlsOp(tablename=tablename, schemaname=schemaname))
 
