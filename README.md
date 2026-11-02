@@ -2,6 +2,12 @@
 
 Adds PostgreSQL row-level security (RLS) support to your Python application by extending `sqlalchemy` and `alembic`.
 
+### Goals and threat model
+
+The goal of this package is to protect against **application logic mistakes**, such as a query that forgets to filter by the current account, by making data access rules declarative, easy to understand and easy to audit. Policies live next to the models they protect, and every query run through an `RlsSession` is filtered by them.
+
+It is **not** a defense against hostile SQL (for example SQL injection or untrusted users with direct database access). RLS context values, including `rls.bypass_rls`, are ordinary PostgreSQL settings that any SQL running on the connection can change, by design.
+
 ---
 
 ## Installation
@@ -149,6 +155,10 @@ res = session.execute(text("SELECT * FROM users")).fetchall()
 with session.bypass_rls() as session:
     res2 = session.execute(text("SELECT * FROM items")).fetchall()
 ```
+
+The context is applied to everything the session sends to the database: `execute`/`scalar(s)`, `get`, `refresh`, lazy loads, ORM flushes and `session.connection()`. `AsyncRlsSession` behaves the same way.
+
+Settings are applied with `set_config(..., is_local => true)`, so they only last until the end of the current transaction and never leak to the next user of a pooled connection. They are sent once at the start of each transaction, and again only when they change: entering or exiting `bypass_rls()`, changing a mutable context, or rolling back a savepoint.
 
 #### RlsSessioner
 

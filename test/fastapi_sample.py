@@ -65,7 +65,7 @@ app = fastapi.FastAPI(lifespan=sample_database_setup)
 
 
 @app.get("/users")
-def get_users(db=demo_sessioner, account_id: int | None = None) -> list[str]:
+def get_users(db=demo_sessioner, account_id: int | None = None) -> list[str | None]:
     del account_id
     # This query will already have the rls context set from the request.
     result = db.execute(sa.select(models.User.username)).scalars()
@@ -77,7 +77,7 @@ def get_users(db=demo_sessioner, account_id: int | None = None) -> list[str]:
 @app.get("/all_users")
 def get_all_users(
     db: session.RlsSession = demo_sessioner, account_id: int | None = None
-) -> list[str]:
+) -> list[str | None]:
     del account_id
     with db.bypass_rls():
         result = list(db.execute(sa.select(models.User.username)).scalars())
@@ -90,7 +90,7 @@ def get_all_users(
 async def async_get_users(
     db: session.AsyncRlsSession = async_demo_sessioner,
     account_id: int | None = None,
-) -> list[str]:
+) -> list[str | None]:
     del account_id
     # This query will already have the rls context set from the request.
     result = (await db.execute(sa.select(models.User.username))).scalars()
@@ -101,7 +101,7 @@ async def async_get_users(
 async def async_get_all_users(
     db: session.AsyncRlsSession = async_demo_sessioner,
     account_id: int | None = None,
-) -> list[str]:
+) -> list[str | None]:
     del account_id
     async with db.bypass_rls():
         result = list((await db.execute(sa.select(models.User.username))).scalars())

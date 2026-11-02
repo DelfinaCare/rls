@@ -699,5 +699,164 @@ class SyncRLSTests(unittest.TestCase):
                 )
 
 
+def _detached_user(rls_sess: session.RlsSession, user_id: int) -> models.User:
+    """Attach a persistent User without loading it, so the next database
+    access is the UPDATE issued by flush()."""
+    user = models.User(id=user_id, username=f"user{user_id}")
+    orm.make_transient_to_detached(user)
+    rls_sess.add(user)
+    return user
+
+
+class SyncRLSRegressionTests(unittest.TestCase):
+    """Regression tests for RLS settings leaking or not being applied."""
+
+    instance: database.TestPostgres
+    engine: sqlalchemy.engine.Engine
+
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        # A single pooled connection makes connection reuse deterministic.
+        cls.engine = sqlalchemy.create_engine(
+            cls.instance.url, pool_size=1, max_overflow=0
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.engine.dispose()
+        cls.instance.close()
+
+    def _use_account(self, account_id: int) -> None:
+        """Run a query as account_id and return the connection to the pool."""
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=account_id), bind=self.engine
+        ) as rls_sess:
+            self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [1])
+            rls_sess.commit()
+
+    def _count_set_config(self) -> list[str]:
+        statements: list[str] = []
+
+        def listener(conn, cursor, statement, parameters, context, executemany):
+            if "set_config" in statement:
+                statements.append(statement)
+
+        sqlalchemy.event.listen(self.engine, "before_cursor_execute", listener)
+        self.addCleanup(
+            sqlalchemy.event.remove, self.engine, "before_cursor_execute", listener
+        )
+        return statements
+
+    def test_settings_do_not_leak_to_none_context_session(self):
+        """A pooled connection must not carry a previous session's context."""
+        self._use_account(1)
+        with session.RlsSession(context=None, bind=self.engine) as rls_sess:
+            self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [])
+
+    def test_settings_do_not_leak_to_plain_connection(self):
+        """Nothing remains set on a connection after it returns to the pool."""
+        self._use_account(1)
+        with self.engine.connect() as conn:
+            value = conn.execute(
+                sqlalchemy.text("SELECT current_setting('rls.account_id', true)")
+            ).scalar()
+            self.assertIn(value, ("", None))
+
+    def test_flush_uses_current_context_on_reused_connection(self):
+        """An ORM flush must run with the session's own context."""
+        self._use_account(1)
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=2), bind=self.engine
+        ) as rls_sess:
+            user = _detached_user(rls_sess, 1)
+            user.username = "hijacked"
+            # Account 2 cannot see user 1, so the UPDATE matches no rows.
+            with self.assertRaises(orm.exc.StaleDataError):
+                rls_sess.flush()
+
+    def test_flush_inside_bypass_applies_bypass(self):
+        """A flush inside bypass_rls() runs with RLS bypassed."""
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=2), bind=self.engine
+        ) as rls_sess:
+            rls_sess.execute(_NOOP_QUERY)
+            with rls_sess.bypass_rls():
+                user = _detached_user(rls_sess, 1)
+                user.username = "bypassed"
+                rls_sess.flush()
+            rls_sess.rollback()
+
+    def test_flush_uses_mutated_context(self):
+        """A flush after mutating the context runs with the new context."""
+        context = models.SampleRlsContext(account_id=2)
+        with session.RlsSession(context=context, bind=self.engine) as rls_sess:
+            rls_sess.execute(_NOOP_QUERY)
+            context.account_id = 1
+            user = _detached_user(rls_sess, 1)
+            user.username = "mutated"
+            rls_sess.flush()
+            rls_sess.rollback()
+
+    def test_get_applies_context(self):
+        """Session.get() runs with the session's context."""
+        self._use_account(1)
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=2), bind=self.engine
+        ) as rls_sess:
+            self.assertIsNone(rls_sess.get(models.User, 1))
+            user = rls_sess.get(models.User, 2)
+            self.assertIsNotNone(user)
+
+    def test_connection_applies_context(self):
+        """Statements run on session.connection() use the session's context."""
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=2), bind=self.engine
+        ) as rls_sess:
+            conn = rls_sess.connection()
+            self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [2])
+            with rls_sess.bypass_rls():
+                conn = rls_sess.connection()
+                self.assertEqual(conn.execute(_USER_ID_QUERY).scalars().all(), [1, 2])
+
+    def test_settings_applied_once_per_transaction(self):
+        """Repeated statements in one transaction do not re-send settings."""
+        statements = self._count_set_config()
+        with session.RlsSession(
+            context=models.ImmutableSampleRlsContext(account_id=1), bind=self.engine
+        ) as rls_sess:
+            for _ in range(3):
+                rls_sess.execute(_USER_ID_QUERY)
+            rls_sess.get(models.User, 1)
+            self.assertEqual(len(statements), 1)
+            rls_sess.commit()
+            rls_sess.execute(_USER_ID_QUERY)
+            rls_sess.execute(_USER_ID_QUERY)
+            self.assertEqual(len(statements), 2)
+
+    def test_mutable_context_settings_applied_only_on_change(self):
+        """A mutable context only re-sends settings when it actually changes."""
+        statements = self._count_set_config()
+        context = models.SampleRlsContext(account_id=1)
+        with session.RlsSession(context=context, bind=self.engine) as rls_sess:
+            rls_sess.execute(_USER_ID_QUERY)
+            rls_sess.execute(_USER_ID_QUERY)
+            self.assertEqual(len(statements), 1)
+            context.account_id = 2
+            self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [2])
+            rls_sess.execute(_USER_ID_QUERY)
+            self.assertEqual(len(statements), 2)
+
+    def test_savepoint_rollback_reapplies_settings(self):
+        """Rolling back a savepoint re-applies the settings it reverted."""
+        with session.RlsSession(
+            context=models.SampleRlsContext(account_id=1), bind=self.engine
+        ) as rls_sess:
+            savepoint = rls_sess.begin_nested()
+            self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [1])
+            savepoint.rollback()
+            self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [1])
+
+
 if __name__ == "__main__":
     unittest.main()

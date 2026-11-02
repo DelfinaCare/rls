@@ -4,6 +4,7 @@ import unittest
 import pydantic
 import sqlalchemy
 import sqlalchemy.exc
+from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
 from rls import session
@@ -713,6 +714,101 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
                             "UPDATE users SET username = 'user1' WHERE id = 1"
                         )
                     )
+
+
+class AsyncRLSRegressionTests(unittest.IsolatedAsyncioTestCase):
+    """Regression tests for operations that AsyncSession runs on its sync
+    session, and for settings leaking between pooled connections."""
+
+    instance: database.TestPostgres
+    engine: sa_asyncio.AsyncEngine
+
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.instance.close()
+
+    async def asyncSetUp(self):
+        # A single pooled connection makes connection reuse deterministic.
+        self.engine = sa_asyncio.create_async_engine(
+            self.instance.url, pool_size=1, max_overflow=0
+        )
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    def _new_session(self, account_id: int | None) -> session.AsyncRlsSession:
+        return session.AsyncRlsSession(
+            context=models.SampleRlsContext(account_id=account_id),
+            bind=self.engine,
+        )
+
+    async def _use_account(self, account_id: int) -> None:
+        async with self._new_session(account_id) as rls_sess:
+            await rls_sess.execute(_USER_ID_QUERY)
+            await rls_sess.commit()
+
+    async def test_get_applies_context(self):
+        """AsyncSession.get() runs with the session's context."""
+        async with self._new_session(2) as rls_sess:
+            user = await rls_sess.get(models.User, 2)
+            self.assertIsNotNone(user)
+            self.assertIsNone(await rls_sess.get(models.User, 1))
+
+    async def test_get_does_not_use_previous_context(self):
+        """AsyncSession.get() must not run with a pooled connection's old context."""
+        await self._use_account(1)
+        async with self._new_session(2) as rls_sess:
+            self.assertIsNone(await rls_sess.get(models.User, 1))
+
+    async def test_get_inside_bypass(self):
+        """AsyncSession.get() inside bypass_rls() sees all rows."""
+        async with self._new_session(2) as rls_sess:
+            async with rls_sess.bypass_rls():
+                self.assertIsNotNone(await rls_sess.get(models.User, 1))
+
+    async def test_refresh_applies_context(self):
+        """AsyncSession.refresh() runs with the session's context."""
+        async with self._new_session(1) as rls_sess:
+            user = await rls_sess.scalar(
+                sqlalchemy.select(models.User).where(models.User.id == 1)
+            )
+            assert user is not None
+            await rls_sess.commit()
+            await rls_sess.refresh(user)
+            self.assertEqual(user.id, 1)
+
+    async def test_stream_applies_context(self):
+        """AsyncSession.stream_scalars() runs with the session's context."""
+        async with self._new_session(2) as rls_sess:
+            result = await rls_sess.stream_scalars(_USER_ID_QUERY)
+            self.assertEqual([row async for row in result], [2])
+
+    async def test_flush_applies_context(self):
+        """An ORM flush runs with the session's own context."""
+        await self._use_account(1)
+        async with self._new_session(2) as rls_sess:
+            user = models.User(id=1, username="user1")
+            orm.make_transient_to_detached(user)
+            rls_sess.add(user)
+            user.username = "hijacked"
+            # Account 2 cannot see user 1, so the UPDATE matches no rows.
+            with self.assertRaises(orm.exc.StaleDataError):
+                await rls_sess.flush()
+
+    async def test_settings_do_not_leak_to_none_context_session(self):
+        """A pooled connection must not carry a previous session's context."""
+        await self._use_account(1)
+        async with session.AsyncRlsSession(context=None, bind=self.engine) as sess:
+            self.assertEqual((await sess.scalars(_USER_ID_QUERY)).all(), [])
+
+    async def test_rejects_non_rls_sync_session_class(self):
+        """sync_session_class must be an RlsSession."""
+        with self.assertRaises(TypeError):
+            session.AsyncRlsSession(bind=self.engine, sync_session_class=orm.Session)
 
 
 if __name__ == "__main__":
