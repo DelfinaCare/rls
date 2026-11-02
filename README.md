@@ -8,6 +8,8 @@ The goal of this package is to protect against **application logic mistakes**, s
 
 It is **not** a defense against hostile SQL (for example SQL injection or untrusted users with direct database access). RLS context values, including `rls.bypass_rls`, are ordinary PostgreSQL settings that any SQL running on the connection can change, by design.
 
+> **Warning: migrating an existing RLS setup.** Once registered with alembic, this package manages RLS for every table in your metadata: autogenerate **drops existing policies** that are not declared in `__rls_policies__` and **disables RLS** on tables that declare no policies. If your database already has RLS policies, read the [migration guide](./migration.md) before using the alembic integration.
+
 ---
 
 ## Installation
@@ -113,6 +115,19 @@ Policies declared on an unmapped mixin apply to every model using the mixin.
 
 The final policy name always ends with a short hash of the policy definition, so changing a policy changes its name (see the [alembic docs](./alembic.md)).
 
+#### ExternalPolicy
+
+`ExternalPolicy` declares a policy that already exists on the table and is managed outside of this package (e.g. by hand-written migrations). Alembic autogenerate never creates or drops it, and `rls.create_policies` skips it. It can be mixed with native policies in `__rls_policies__`:
+
+```python
+__rls_policies__ = [
+    policy.ExternalPolicy(name="legacy_owner_policy"),
+    Policy.from_sqla(...),
+]
+```
+
+`name` must match the policy's name in Postgres exactly. See the [migration guide](./migration.md) for how to use it to adopt existing policies.
+
 #### ConditionArg
 
 `ConditionArg` describes a variable that will be set on the PostgreSQL session before a query runs, allowing the policy expression to reference it.
@@ -163,6 +178,7 @@ target_metadata = Base.metadata
 
 You can then generate a revision and run `alembic upgrade head` as normal — the policies will be created or dropped automatically.
 For details on the custom Alembic operations used internally, see the [alembic docs](./alembic.md).
+Set the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` to stop autogenerate from emitting any RLS operations (see the [migration guide](./migration.md)).
 If you are not using alembic, you can call `rls.create_policies` directly.
 
 ---

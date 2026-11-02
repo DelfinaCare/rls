@@ -1,3 +1,4 @@
+import os
 import typing
 import unittest
 from unittest import mock
@@ -825,6 +826,98 @@ class TestCompareTableLevel(unittest.TestCase):
         """A table being dropped (no metadata table) produces no RLS ops."""
         modify_ops = self._build_context(rls_enabled=True, metadata_table_present=False)
         self.assertEqual(modify_ops.ops, [])
+
+    def test_external_policy_is_not_dropped(self):
+        """External policies that exist in the database are left untouched."""
+        db_policy = policy.Policy(
+            name="legacy_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            db_policies=[db_policy],
+            meta_policies={"users": [policy.ExternalPolicy(name="legacy_policy")]},
+        )
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_external_policy_is_not_created(self):
+        """External policies missing from the database are not created."""
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            meta_policies={"users": [policy.ExternalPolicy(name="legacy_policy")]},
+        )
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_external_policy_alongside_native_policies(self):
+        """Native policies are managed while external ones are kept."""
+        meta_policy = _sample_policy()
+        external_db_policy = policy.Policy(
+            name="legacy_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        stale_db_policy = policy.Policy(
+            name="stale_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        modify_ops = self._build_context(
+            rls_enabled=True,
+            db_policies=[external_db_policy, stale_db_policy],
+            meta_policies={
+                "users": [policy.ExternalPolicy(name="legacy_policy"), meta_policy]
+            },
+        )
+        self.assertEqual(
+            [(type(op), op.policy_name) for op in modify_ops.ops],
+            [
+                (alembic_ops.DropPolicyOp, "stale_policy"),
+                (alembic_ops.CreatePolicyOp, meta_policy.name),
+            ],
+        )
+
+    def test_only_external_policies_keeps_rls_enabled(self):
+        """A table with only external policies still has RLS enabled."""
+        meta = {"users": [policy.ExternalPolicy(name="legacy_policy")]}
+        modify_ops = self._build_context(rls_enabled=False, meta_policies=meta)
+        self.assertEqual([type(op) for op in modify_ops.ops], [alembic_ops.EnableRlsOp])
+        modify_ops = self._build_context(rls_enabled=True, meta_policies=meta)
+        self.assertEqual(modify_ops.ops, [])
+
+    def test_suppressed_by_env_var(self):
+        """RLS_SUPPRESS_ALEMBIC_GENERATION disables all RLS autogenerate ops."""
+        orphan = policy.Policy(
+            name="orphan_policy",
+            cmd=policy.Command.select,
+            expr="true",
+            policy_type=policy.PolicyType.permissive,
+        )
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            with self.subTest(value=value):
+                with mock.patch.dict(
+                    os.environ, {"RLS_SUPPRESS_ALEMBIC_GENERATION": value}
+                ):
+                    modify_ops = self._build_context(
+                        rls_enabled=True,
+                        db_policies=[orphan],
+                        meta_policies={"users": [_sample_policy()]},
+                    )
+                self.assertEqual(modify_ops.ops, [])
+        for value in ("", "0", "false", "no"):
+            with self.subTest(value=value):
+                with mock.patch.dict(
+                    os.environ, {"RLS_SUPPRESS_ALEMBIC_GENERATION": value}
+                ):
+                    modify_ops = self._build_context(
+                        rls_enabled=True,
+                        db_policies=[orphan],
+                        meta_policies={"users": [_sample_policy()]},
+                    )
+                self.assertEqual(len(modify_ops.ops), 2)
 
 
 class TestSchemaQualifiedPolicyOps(unittest.TestCase):

@@ -30,6 +30,10 @@ Table, schema and policy names are passed unquoted and are quoted as needed, so 
 
 Autogenerate compares against the policies that exist on a table even when RLS is currently disabled on it, so existing policies are not re-created and stale ones are dropped.
 
+Policies declared as `ExternalPolicy` are managed outside of this package: autogenerate never creates or drops them. Setting the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` (or `true`, `yes`, `on`) disables all RLS autogenerate operations. Both are intended for migrating an existing RLS codebase, see the [migration guide](./migration.md).
+
+**Warning**: autogenerate drops any policy on a table in your metadata that is not declared in `__rls_policies__`, and disables RLS on tables that declare no policies.
+
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
 
 **Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy definition (e.g. `permissive_account_id_select_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
