@@ -118,6 +118,9 @@ class TestRegister(unittest.TestCase):
             __rls_policies__ = self.sample_policies
             __rls_mode__ = "ENABLE"
 
+        self.assertIn(DefaultMode.__tablename__, Base.metadata.tables)
+        self.assertIn(EnableMode.__tablename__, Base.metadata.tables)
+        self.assertIn(EnableStringMode.__tablename__, Base.metadata.tables)
         self.assertEqual(
             Base.metadata.info["rls_modes"],
             {
@@ -135,7 +138,7 @@ class TestRegister(unittest.TestCase):
 
         with self.assertRaises(ValueError):
 
-            class InvalidMode(Base):
+            class _InvalidMode(Base):
                 __tablename__ = "invalid_mode"
                 id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
                 __rls_policies__ = self.sample_policies
