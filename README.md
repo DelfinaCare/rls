@@ -112,8 +112,20 @@ Policies declared on an unmapped mixin apply to every model using the mixin.
 - `name`: optional name prefix; defaults to `<policy_type>_<comparator names>_<cmd>`
 - `policy_type`: `PolicyType.permissive` (default) or `PolicyType.restrictive`
 - `allow_bypass_rls`: whether the policy can be bypassed with `bypass_rls()` (default `True`)
+- `check_expr`: optional separate `WITH CHECK` expression for `update` and `all` policies, called with the same `condition_args` as `expr`. `expr` is the `USING` expression, which selects the existing rows the policy applies to, while `check_expr` validates the new rows written. Without it, new rows are checked with `expr`. Passing it for other commands raises `ValueError`.
+- `roles`: optional list of roles the policy applies to (`TO ...`); defaults to all roles (`PUBLIC`). `PUBLIC`, `CURRENT_USER`, `CURRENT_ROLE` and `SESSION_USER` are rendered as keywords, other names are quoted as needed.
 
-The final policy name always ends with a short hash of the policy definition, so changing a policy changes its name (see the [alembic docs](./alembic.md)).
+```python
+Policy.from_sqla(
+    expr=lambda x: column("owner_id") == x,  # rows that can be updated
+    check_expr=lambda x: and_(column("owner_id") == x, column("locked") == false()),
+    condition_args=[ConditionArg(comparator_name="account_id", type=Integer)],
+    cmd=Command.update,
+    roles=["app_user"],
+)
+```
+
+The final policy name always ends with a short hash of the policy definition (type, command, expressions and roles), so changing a policy changes its name (see the [alembic docs](./alembic.md)). Two identical policies with the same name on one table would get the same name, so registering a table whose policies share a name raises `ValueError`; give one of them a different `name` or remove the duplicate.
 
 #### ExternalPolicy
 
@@ -132,7 +144,7 @@ __rls_policies__ = [
 
 `ConditionArg` describes a variable that will be set on the PostgreSQL session before a query runs, allowing the policy expression to reference it.
 
-- `comparator_name`: the PostgreSQL session variable name
+- `comparator_name`: the name of the context field the value is read from (sent as the `rls.<comparator_name>` setting). It must be a valid Python identifier other than `bypass_rls`.
 - `type`: the SQLAlchemy type the variable is cast to, as a class or, for types that take arguments, an instance
 
 ```python
@@ -197,6 +209,8 @@ from rls import register
 register.base_wrapper(Base)
 target_metadata = Base.metadata
 ```
+
+To catch a `comparator_name` that does not match a context field (which would otherwise silently hide every row, since unset settings read as `NULL`), pass your context model: `register.base_wrapper(Base, context_model=MyContext)` checks every model's policies, including models mapped later, and raises `ValueError` on a mismatch. `register.validate_context(Base, MyContext)` runs the same check on demand.
 
 You can then generate a revision and run `alembic upgrade head` as normal — the policies will be created or dropped automatically.
 For details on the custom Alembic operations used internally, see the [alembic docs](./alembic.md).
