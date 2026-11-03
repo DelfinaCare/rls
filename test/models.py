@@ -40,7 +40,7 @@ class User(sa_asyncio.AsyncAttrs, Base):
     ]
 
 
-class Item(Base):
+class Item(sa_asyncio.AsyncAttrs, Base):
     __tablename__ = "items"
 
     id: orm.Mapped[int] = orm.mapped_column(

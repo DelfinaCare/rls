@@ -60,7 +60,8 @@ def test_postgres_instance() -> TestPostgres:
             GRANT CONNECT ON DATABASE {database} TO {non_superadmin_user};
             GRANT USAGE ON SCHEMA public TO {non_superadmin_user};
             ALTER ROLE {non_superadmin_user} WITH LOGIN;
-            GRANT SELECT, UPDATE ON ALL TABLES IN SCHEMA public TO {non_superadmin_user};
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {non_superadmin_user};
+            GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {non_superadmin_user};
                                     """)
         )
     connection.close()

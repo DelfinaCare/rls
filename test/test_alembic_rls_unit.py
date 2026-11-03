@@ -344,7 +344,7 @@ class TestDropPolicyImpl(unittest.TestCase):
             expr="id = 1",
         )
         alembic_ops.drop_policy(ops, operation)
-        ops.execute.assert_called_once_with("DROP POLICY pol1 ON users;")
+        ops.execute.assert_called_once_with("DROP POLICY pol1 ON users")
 
 
 class TestRenderCreatePolicy(unittest.TestCase):
@@ -941,7 +941,7 @@ class TestSchemaQualifiedPolicyOps(unittest.TestCase):
     def test_drop_policy_uses_schema(self):
         ops = _mock_operations()
         alembic_ops.drop_policy(ops, self._create_op().reverse())
-        ops.execute.assert_called_once_with("DROP POLICY pol1 ON myschema.users;")
+        ops.execute.assert_called_once_with("DROP POLICY pol1 ON myschema.users")
 
     def test_reverse_keeps_schema(self):
         rev = self._create_op().reverse()
@@ -1022,7 +1022,7 @@ class TestIdentifierQuoting(unittest.TestCase):
         ops = _mock_operations()
         alembic_ops.drop_policy(ops, self._policy_op().reverse())
         ops.execute.assert_called_once_with(
-            'DROP POLICY "My Policy" ON "MySchema"."user";'
+            'DROP POLICY "My Policy" ON "MySchema"."user"'
         )
 
     def test_colons_in_identifiers_are_not_bind_params(self):
@@ -1032,7 +1032,7 @@ class TestIdentifierQuoting(unittest.TestCase):
         )
         stmt = sqlalchemy.text(ops.execute.call_args[0][0])
         self.assertEqual(stmt.compile().params, {})
-        self.assertEqual(str(stmt), 'DROP POLICY "a :b" ON "MySchema"."t:x";')
+        self.assertEqual(str(stmt), 'DROP POLICY "a :b" ON "MySchema"."t:x"')
 
 
 if __name__ == "__main__":

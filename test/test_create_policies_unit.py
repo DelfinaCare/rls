@@ -114,7 +114,7 @@ class TestCreatePolicies(unittest.TestCase):
     def test_forces_rls_by_default(self):
         Base = _make_base_with_policies({"my_table": [self._sample_policy()]})
         executed_sqls = self._executed_sqls(Base)
-        self.assertIn("ALTER TABLE my_table FORCE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertIn("ALTER TABLE my_table FORCE ROW LEVEL SECURITY", executed_sqls)
 
     def test_enable_mode_does_not_force_rls(self):
         Base = _make_base_with_policies(
@@ -125,14 +125,14 @@ class TestCreatePolicies(unittest.TestCase):
             "forced": policy.RlsMode.enable_and_force,
         }
         executed_sqls = self._executed_sqls(Base)
-        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY", executed_sqls)
         self.assertNotIn(
-            "ALTER TABLE my_table FORCE ROW LEVEL SECURITY;", executed_sqls
+            "ALTER TABLE my_table FORCE ROW LEVEL SECURITY", executed_sqls
         )
         self.assertIn(
-            "ALTER TABLE my_table NO FORCE ROW LEVEL SECURITY;", executed_sqls
+            "ALTER TABLE my_table NO FORCE ROW LEVEL SECURITY", executed_sqls
         )
-        self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY", executed_sqls)
 
     def test_identifiers_are_quoted(self):
         Base = _make_base_with_policies({})
@@ -147,9 +147,9 @@ class TestCreatePolicies(unittest.TestCase):
             "MySchema.Docs": [self._sample_policy()],
         }
         executed_sqls = self._executed_sqls(Base)
-        self.assertIn('ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;', executed_sqls)
+        self.assertIn('ALTER TABLE "user" ENABLE ROW LEVEL SECURITY', executed_sqls)
         self.assertIn(
-            'ALTER TABLE "MySchema"."Docs" FORCE ROW LEVEL SECURITY;', executed_sqls
+            'ALTER TABLE "MySchema"."Docs" FORCE ROW LEVEL SECURITY', executed_sqls
         )
         self.assertTrue(any('ON "user"' in s for s in executed_sqls))
         self.assertTrue(any('ON "MySchema"."Docs"' in s for s in executed_sqls))
@@ -159,7 +159,7 @@ class TestCreatePolicies(unittest.TestCase):
             {"my_table": [policy.ExternalPolicy(name="legacy_policy")]}
         )
         executed_sqls = self._executed_sqls(Base)
-        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;", executed_sqls)
+        self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY", executed_sqls)
         self.assertFalse(any("CREATE POLICY" in s for s in executed_sqls))
 
     def test_unregistered_base_raises(self):
@@ -177,7 +177,7 @@ class TestCreatePolicies(unittest.TestCase):
         p = self._sample_policy()
         Base = _make_base_with_policies({"user": [p]})
         executed_sqls = self._executed_sqls(Base)
-        drop_sql = f'DROP POLICY IF EXISTS {p.name} ON "user";'
+        drop_sql = f'DROP POLICY IF EXISTS {p.name} ON "user"'
         self.assertIn(drop_sql, executed_sqls)
         create_ix = next(
             i for i, s in enumerate(executed_sqls) if s.startswith("CREATE POLICY")
