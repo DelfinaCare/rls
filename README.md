@@ -205,6 +205,8 @@ with session.bypass_rls() as session:
 
 The context is applied to everything the session sends to the database: `execute`/`scalar(s)`, `get`, `refresh`, lazy loads, ORM flushes and `session.connection()` (including later changes to the context or `bypass_rls()` state for statements run directly on that connection). `AsyncRlsSession` behaves the same way.
 
+Context field values are sent to PostgreSQL as text and cast by the policy expression. Supported field types are `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `datetime`, `date`, `time`, and enums whose values are `str` or `int` (sent by their `.value`, e.g. `"admin"` rather than `"Role.admin"`), as well as `Optional`/`Union` combinations of these. Constrained or aliased forms of these types (e.g. `Annotated[int, ...]`, `pydantic.PositiveInt`, `NewType`, `type` aliases) are also supported, including inside `Optional`. A `None` value matches no rows. Other types (e.g. lists, dicts, `Literal`, nested models, or a field that can only be `None`) raise `TypeError` when the session is created.
+
 Settings are applied with `set_config(..., is_local => true)`, so they only last until the end of the current transaction and never leak to the next user of a pooled connection. They are sent once at the start of each transaction, and again only when they change: entering or exiting `bypass_rls()`, changing a mutable context, or rolling back a savepoint.
 
 #### RlsSessioner

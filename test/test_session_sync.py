@@ -1,3 +1,4 @@
+import enum
 import unittest
 
 import pydantic
@@ -270,6 +271,46 @@ class SyncRLSTests(unittest.TestCase):
             rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
             self.assertEqual(rows, [], "Expected no rows when account_id is None.")
         rls_sess.close()
+
+    def test_int_enum_context_field_filters_results(self):
+        """An enum context field is sent by value, so the policy cast works."""
+
+        class Account(enum.IntEnum):
+            first = 1
+
+        class EnumContext(pydantic.BaseModel):
+            account_id: Account
+
+        rls_sess = session.RlsSession(
+            context=EnumContext(account_id=Account.first), bind=self.engine
+        )
+        with rls_sess.begin():
+            self.assertEqual(rls_setting(rls_sess, "account_id"), "1")
+            rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+            self.assertEqual(rows, [1])
+        rls_sess.close()
+
+    def test_optional_annotated_context_field_filters_results(self):
+        """An Optional field wrapping a constrained type (e.g. PositiveInt) is
+        accepted; a value filters rows and None matches none."""
+
+        class OptionalContext(pydantic.BaseModel):
+            account_id: pydantic.PositiveInt | None = None
+
+        for account_id, expected_setting, expected_rows in [
+            (2, "2", [2]),
+            (None, "", []),
+        ]:
+            with (
+                self.subTest(account_id=account_id),
+                session.RlsSession(
+                    context=OptionalContext(account_id=account_id), bind=self.engine
+                ) as rls_sess,
+                rls_sess.begin(),
+            ):
+                self.assertEqual(rls_setting(rls_sess, "account_id"), expected_setting)
+                rows = list(rls_sess.execute(_USER_ID_QUERY).scalars())
+                self.assertEqual(rows, expected_rows)
 
     def test_none_context_returns_no_rows(self):
         """Passing context=None to RlsSession returns no rows."""

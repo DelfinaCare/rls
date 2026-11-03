@@ -7,70 +7,7 @@ from sqlalchemy import event
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-
-def _is_context_immutable(context: pydantic.BaseModel | None) -> bool:
-    if context is None:
-        return True
-    model_config = getattr(type(context), "model_config", None)
-    if model_config is None:
-        return False
-    return bool(model_config.get("frozen"))
-
-
-def _context_to_value_params(
-    context: pydantic.BaseModel | None, keys: list[str]
-) -> dict[str, str]:
-    if context is None or not keys:
-        return {}
-    return {
-        f"value_{key}": "" if (x := getattr(context, key)) is None else str(x)
-        for key in keys
-    }
-
-
-_BYPASS_STATEMENT = sqlalchemy.select(
-    sqlalchemy.func.set_config(
-        sqlalchemy.literal("rls.bypass_rls"),
-        sqlalchemy.literal("true"),
-        sqlalchemy.true(),
-    )
-)
-
-
-def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
-    """
-    Pre-computes the SQL template for setting RLS config values at init time.
-
-    All values are set transaction-locally (``is_local => true``), so they are
-    discarded at the end of the transaction and never leak to other users of a
-    pooled connection.
-
-    The SQLAlchemy select() expression with literal setting names and named
-    bind parameters for the values is built once and stored.  Each call to
-    _get_set_statement() then only needs to substitute the current field
-    values into this template, which is significantly cheaper than rebuilding
-    the entire statement every time.
-    """
-    set_config_calls = [
-        sqlalchemy.func.set_config(
-            sqlalchemy.literal("rls.bypass_rls"),
-            sqlalchemy.literal("false"),
-            sqlalchemy.true(),
-        )
-    ]
-    for key in keys:
-        if key == "bypass_rls":
-            raise ValueError("Context field names cannot be 'bypass_rls'")
-        # Bind parameters are named after the field (e.g. setting_account_id,
-        # value_account_id) so the mapping is explicit and not order-dependent.
-        set_config_calls.append(
-            sqlalchemy.func.set_config(
-                sqlalchemy.literal(f"rls.{key}"),
-                sqlalchemy.bindparam(f"value_{key}"),
-                sqlalchemy.true(),
-            )
-        )
-    return sqlalchemy.select(*set_config_calls)
+from rls import session_context
 
 
 class _RlsSessionState:
@@ -98,15 +35,18 @@ class _RlsSessionState:
         # Re-entrancy guard: _rls_sync() itself executes statements.
         self._rls_syncing = False
         self._context = context
-        self._rls_context_is_immutable = _is_context_immutable(context)
-        self._rls_context_keys: list[str] = (
-            list(type(self._context).model_fields.keys()) if self._context else []
+        self._rls_context_is_immutable = session_context.is_context_immutable(context)
+        # The statement template and the function rendering the current field
+        # values into its bind params are each built (and validated) once per
+        # context class.
+        self._rls_set_statement = session_context.set_statement_template(
+            type(context) if context else None
         )
-        template = _set_statement_template(self._rls_context_keys)
-        # Wrap the template in SQLAlchemy's lambda statement infrastructure so
-        # the statement construction and its compilation are cached; only the
-        # bound values need to be supplied at execution time.
-        self._rls_set_statement = sqlalchemy.lambda_stmt(lambda: template)
+        self._rls_render_values: session_context.RenderValues = (
+            session_context.render_values_function(type(context))
+            if context
+            else session_context.render_no_values
+        )
 
     def _rls_needs_apply(self) -> bool:
         if self._rls_dirty:
@@ -115,7 +55,7 @@ class _RlsSessionState:
             return False
         return self._context != self._rls_last_set_context_snapshot
 
-    def _get_set_statement(
+    def _pending_rls_statements(
         self,
     ) -> tuple[sqlalchemy.Executable, dict[str, str]]:
         """
@@ -129,12 +69,12 @@ class _RlsSessionState:
         filter out all rows.
         """
         if self._rls_bypass_depth > 0:
-            return _BYPASS_STATEMENT, {}
+            return session_context.BYPASS_STATEMENT, {}
         self._rls_last_set_context_snapshot = (
             self._context.model_copy(deep=True) if self._context else None
         )
-        return self._rls_set_statement, _context_to_value_params(
-            self._rls_last_set_context_snapshot, self._rls_context_keys
+        return self._rls_set_statement, self._rls_render_values(
+            self._rls_last_set_context_snapshot
         )
 
     def _rls_sync(self, new_connection: sqlalchemy.Connection | None = None) -> None:
@@ -164,7 +104,7 @@ class _RlsSessionState:
         else:
             return
         if targets:
-            statement, params = self._get_set_statement()
+            statement, params = self._pending_rls_statements()
             for connection in targets:
                 connection.execute(statement, params)
         self._rls_dirty = False
