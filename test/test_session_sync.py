@@ -1,4 +1,5 @@
 import enum
+import typing
 import unittest
 
 import pydantic
@@ -6,6 +7,9 @@ import sqlalchemy
 import sqlalchemy.exc
 from sqlalchemy import orm
 
+from rls import create_policies
+from rls import policy
+from rls import register
 from rls import rls_sessioner
 from rls import session
 from test import database
@@ -953,6 +957,257 @@ class SyncRLSRegressionTests(unittest.TestCase):
             self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [1])
             savepoint.rollback()
             self.assertEqual(rls_sess.execute(_USER_ID_QUERY).scalars().all(), [1])
+
+
+_RLS_VIOLATION = "row-level security"
+
+
+class SyncRLSWriteTests(unittest.TestCase):
+    """ORM writes (INSERT/UPDATE/DELETE) are checked against the policies."""
+
+    instance: database.TestPostgres
+    engine: sqlalchemy.engine.Engine
+
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        # A single pooled connection makes connection reuse deterministic.
+        cls.engine = sqlalchemy.create_engine(
+            cls.instance.url, pool_size=1, max_overflow=0
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.engine.dispose()
+        cls.instance.close()
+
+    def _new_session(self, account_id: int) -> session.RlsSession:
+        return session.RlsSession(
+            context=models.SampleRlsContext(account_id=account_id), bind=self.engine
+        )
+
+    def test_orm_insert_allowed_by_with_check(self):
+        with self._new_session(1) as rls_sess:
+            item = models.Item(title="new", owner_id=1)
+            rls_sess.add(item)
+            rls_sess.flush()
+            self.assertIsNotNone(item.id)
+            rls_sess.rollback()
+
+    def test_orm_insert_rejected_by_with_check(self):
+        with self._new_session(1) as rls_sess:
+            rls_sess.add(models.Item(title="new", owner_id=2))
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, _RLS_VIOLATION
+            ):
+                rls_sess.flush()
+
+    def test_orm_insert_uses_own_context_on_reused_connection(self):
+        """An INSERT on a pooled connection is checked with the new context."""
+        with self._new_session(2) as rls_sess:
+            rls_sess.add(models.Item(title="new", owner_id=2))
+            rls_sess.flush()
+            rls_sess.commit()
+        with self._new_session(1) as rls_sess:
+            rls_sess.add(models.Item(title="new", owner_id=2))
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, _RLS_VIOLATION
+            ):
+                rls_sess.flush()
+        with self.instance.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text("DELETE FROM items WHERE title = 'new'"))
+
+    def test_orm_update_rejected_by_with_check(self):
+        """Moving a visible row out of the account fails the WITH CHECK."""
+        with self._new_session(1) as rls_sess:
+            item = rls_sess.scalars(
+                sqlalchemy.select(models.Item).where(models.Item.owner_id == 1)
+            ).first()
+            assert item is not None
+            item.owner_id = 2
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, _RLS_VIOLATION
+            ):
+                rls_sess.flush()
+
+    def test_delete_only_affects_visible_rows(self):
+        with self._new_session(2) as rls_sess:
+            result = rls_sess.execute(
+                sqlalchemy.delete(models.User).where(models.User.id == 1)
+            )
+            self.assertEqual(typing.cast(sqlalchemy.CursorResult, result).rowcount, 0)
+            rls_sess.rollback()
+
+    def test_bypass_allows_insert(self):
+        with self._new_session(1) as rls_sess:
+            with rls_sess.bypass_rls():
+                rls_sess.add(models.Item(title="bypass", owner_id=2))
+                rls_sess.flush()
+            rls_sess.rollback()
+
+
+_SCHEMA = "rls_runtime"
+_OTHER_ROLE = "rls_other_role"
+_FORBIDDEN_TITLE = "forbidden"
+
+
+class _SchemaBase(orm.DeclarativeBase):
+    pass
+
+
+register.base_wrapper(_SchemaBase, context_model=models.SampleRlsContext)
+
+
+def _account_arg() -> list[policy.ConditionArg]:
+    return [policy.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer)]
+
+
+class _Doc(_SchemaBase):
+    __tablename__ = "docs"
+    __table_args__ = ({"schema": _SCHEMA},)
+
+    id: orm.Mapped[int] = orm.mapped_column(sqlalchemy.Integer, primary_key=True)
+    owner_id: orm.Mapped[int] = orm.mapped_column(sqlalchemy.Integer)
+    title: orm.Mapped[str] = orm.mapped_column(sqlalchemy.String)
+
+    __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
+        policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.column("owner_id") == x,
+            condition_args=_account_arg(),
+            cmd=policy.Command.select,
+            roles=["test_user"],
+        ),
+        # Would expose every row, but only applies to another role.
+        policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.column("owner_id") >= 0,
+            condition_args=_account_arg(),
+            cmd=policy.Command.select,
+            roles=[_OTHER_ROLE],
+        ),
+        policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.column("owner_id") == x,
+            condition_args=_account_arg(),
+            cmd=policy.Command.insert,
+        ),
+        policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.column("owner_id") == x,
+            check_expr=lambda x: sqlalchemy.and_(
+                sqlalchemy.column("owner_id") == x,
+                sqlalchemy.column("title") != _FORBIDDEN_TITLE,
+            ),
+            condition_args=_account_arg(),
+            cmd=policy.Command.update,
+        ),
+    ]
+
+
+class SyncRLSSchemaRolesTests(unittest.TestCase):
+    """Policies on a schema-qualified table, with roles and a separate WITH
+    CHECK expression, enforced at runtime for a non-superuser."""
+
+    instance: database.TestPostgres
+    engine: sqlalchemy.engine.Engine
+
+    @classmethod
+    def setUpClass(cls):
+        cls.instance = database.test_postgres_instance()
+        with cls.instance.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"CREATE SCHEMA {_SCHEMA}"))
+            conn.execute(sqlalchemy.text(f"CREATE ROLE {_OTHER_ROLE}"))
+            _SchemaBase.metadata.create_all(conn)
+            create_policies.create_policies_no_commit(_SchemaBase, conn)
+            conn.execute(
+                sqlalchemy.insert(_Doc).values(
+                    [
+                        {"id": 1, "owner_id": 1, "title": "one"},
+                        {"id": 2, "owner_id": 2, "title": "two"},
+                    ]
+                )
+            )
+            conn.execute(
+                sqlalchemy.text(f"GRANT USAGE ON SCHEMA {_SCHEMA} TO test_user")
+            )
+            conn.execute(
+                sqlalchemy.text(
+                    f"GRANT SELECT, INSERT, UPDATE ON {_SCHEMA}.docs TO test_user"
+                )
+            )
+        cls.engine = sqlalchemy.create_engine(cls.instance.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.engine.dispose()
+        cls.instance.close()
+
+    def _new_session(self, account_id: int) -> session.RlsSession:
+        return session.RlsSession(
+            context=models.SampleRlsContext(account_id=account_id), bind=self.engine
+        )
+
+    def test_policies_stored_with_roles_and_check(self):
+        with self.instance.admin_engine.connect() as conn:
+            rows = conn.execute(
+                sqlalchemy.text(
+                    "SELECT cmd, roles::text[], qual IS NOT NULL, with_check "
+                    "FROM pg_policies WHERE schemaname = :s AND tablename = 'docs'"
+                ),
+                {"s": _SCHEMA},
+            ).all()
+        by_cmd: dict[str, list] = {}
+        for cmd, roles, has_qual, with_check in rows:
+            by_cmd.setdefault(cmd, []).append((roles, has_qual, with_check))
+        self.assertCountEqual(
+            [roles for roles, _, _ in by_cmd["SELECT"]],
+            [["test_user"], [_OTHER_ROLE]],
+        )
+        ((roles, has_qual, with_check),) = by_cmd["UPDATE"]
+        self.assertEqual(roles, ["public"])
+        self.assertTrue(has_qual)
+        self.assertIn(_FORBIDDEN_TITLE, with_check)
+
+    def test_select_only_applies_policies_for_current_role(self):
+        for account_id in (1, 2):
+            with (
+                self.subTest(account_id=account_id),
+                self._new_session(account_id) as rls_sess,
+            ):
+                ids = rls_sess.scalars(sqlalchemy.select(_Doc.id)).all()
+                self.assertEqual(ids, [account_id])
+
+    def test_get_on_schema_table(self):
+        with self._new_session(1) as rls_sess:
+            self.assertIsNotNone(rls_sess.get(_Doc, 1))
+            self.assertIsNone(rls_sess.get(_Doc, 2))
+
+    def test_insert_on_schema_table(self):
+        with self._new_session(1) as rls_sess:
+            rls_sess.add(_Doc(id=10, owner_id=1, title="ten"))
+            rls_sess.flush()
+            rls_sess.rollback()
+            rls_sess.add(_Doc(id=11, owner_id=2, title="eleven"))
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, _RLS_VIOLATION
+            ):
+                rls_sess.flush()
+
+    def test_update_allowed_by_separate_check(self):
+        with self._new_session(1) as rls_sess:
+            doc = rls_sess.get(_Doc, 1)
+            assert doc is not None
+            doc.title = "renamed"
+            rls_sess.flush()
+            rls_sess.rollback()
+
+    def test_update_rejected_by_separate_check(self):
+        """The row passes USING but the new row fails the WITH CHECK."""
+        with self._new_session(1) as rls_sess:
+            doc = rls_sess.get(_Doc, 1)
+            assert doc is not None
+            doc.title = _FORBIDDEN_TITLE
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, _RLS_VIOLATION
+            ):
+                rls_sess.flush()
 
 
 if __name__ == "__main__":

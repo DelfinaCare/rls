@@ -365,6 +365,145 @@ class TestAlembicOperations(unittest.TestCase):
         # Once applied, autogenerate must not disable RLS or drop the policy.
         self.assertEqual(docs_ops(), [])
 
+    def test_roles_and_check_expr_round_trip(self):
+        """Policies with roles and a separate WITH CHECK are created, read
+        back without spurious diffs, and dropped again."""
+        schema = "rls_roles_test"
+        role = "rls_roles_test_role"
+
+        class RolesBase(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(RolesBase)
+
+        account_id = [
+            policy.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer)
+        ]
+
+        class Note(RolesBase):
+            __tablename__ = "notes"
+            __table_args__ = ({"schema": schema},)
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            owner_id = sqlalchemy.Column(sqlalchemy.Integer)
+            __rls_policies__: typing.ClassVar[list[policy.Policy]] = [
+                policy.Policy.from_sqla(
+                    expr=lambda x: sqlalchemy.sql.column("owner_id") == x,
+                    check_expr=lambda x: sqlalchemy.sql.column("owner_id") > x,
+                    condition_args=account_id,
+                    cmd=policy.Command.update,
+                    roles=[role, "current_user"],
+                ),
+                policy.Policy.from_sqla(
+                    expr=lambda x: sqlalchemy.sql.column("owner_id") == x,
+                    check_expr=lambda x: sqlalchemy.sql.column("owner_id") > x,
+                    condition_args=account_id,
+                    cmd=policy.Command.all,
+                ),
+                policy.Policy.from_sqla(
+                    expr=lambda x: sqlalchemy.sql.column("owner_id") == x,
+                    condition_args=account_id,
+                    cmd=policy.Command.insert,
+                    roles=["public"],
+                ),
+            ]
+
+        def include_name(name, type_, parent_names):
+            return type_ != "schema" or name == schema
+
+        def notes_ops(metadata: sqlalchemy.MetaData) -> list:
+            with self.admin_engine.connect() as conn:
+                ctx = migration.MigrationContext.configure(
+                    conn,
+                    opts={
+                        "include_schemas": True,
+                        "include_name": include_name,
+                        "target_metadata": metadata,
+                    },
+                )
+                script = autogenerate.produce_migrations(ctx, metadata)
+            assert script.upgrade_ops is not None
+            return [
+                op
+                for table_ops in script.upgrade_ops.ops
+                if isinstance(table_ops, alembic_ops_module.ModifyTableOps)
+                and table_ops.table_name == "notes"
+                for op in table_ops.ops
+            ]
+
+        def invoke(ops: list) -> None:
+            with self.admin_engine.begin() as conn:
+                operations = alembic_operations.Operations(
+                    migration.MigrationContext.configure(conn)
+                )
+                for op in ops:
+                    operations.invoke(op)
+
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"CREATE SCHEMA {schema}"))
+            conn.execute(sqlalchemy.text(f"CREATE ROLE {role}"))
+            RolesBase.metadata.create_all(conn)
+        self.addCleanup(self._drop_role, role)
+        self.addCleanup(self._drop_schema, schema)
+
+        invoke(notes_ops(RolesBase.metadata))
+        with self.admin_engine.connect() as conn:
+            stored = {
+                row.policyname: row
+                for row in conn.execute(
+                    sqlalchemy.text(
+                        "SELECT policyname, roles::text[] AS roles, with_check "
+                        "FROM pg_policies WHERE schemaname = :s"
+                    ),
+                    {"s": schema},
+                )
+            }
+        update_policy, all_policy, insert_policy = Note.__rls_policies__
+        self.assertEqual(set(stored), {p.name for p in Note.__rls_policies__})
+        self.assertCountEqual(stored[update_policy.name].roles, [role, "postgres"])
+        self.assertIn("owner_id >", stored[update_policy.name].with_check)
+        self.assertIn("owner_id >", stored[all_policy.name].with_check)
+        self.assertEqual(stored[insert_policy.name].roles, ["public"])
+        self.assertEqual(notes_ops(RolesBase.metadata), [])
+
+        # Dropping the policies reads their roles and checks back.
+        del Note.__rls_policies__[:]
+        drop_ops = notes_ops(RolesBase.metadata)
+        drops = {
+            op.policy_name: op
+            for op in drop_ops
+            if isinstance(op, alembic_ops.DropPolicyOp)
+        }
+        self.assertCountEqual(drops[update_policy.name].roles, [role, "postgres"])
+        self.assertIsNotNone(drops[all_policy.name].check_expr)
+        self.assertIsNone(drops[insert_policy.name].roles)
+        invoke(drop_ops)
+        with self.admin_engine.connect() as conn:
+            remaining = conn.execute(
+                sqlalchemy.text(
+                    "SELECT count(*) FROM pg_policies WHERE schemaname = :s"
+                ),
+                {"s": schema},
+            ).scalar()
+        self.assertEqual(remaining, 0)
+        # Downgrading re-creates them from what was read back.
+        invoke([op.reverse() for op in reversed(drop_ops)])
+        with self.admin_engine.connect() as conn:
+            recreated = conn.execute(
+                sqlalchemy.text(
+                    "SELECT policyname, roles::text[] AS roles, with_check "
+                    "FROM pg_policies WHERE schemaname = :s"
+                ),
+                {"s": schema},
+            ).all()
+        self.assertCountEqual(
+            [(r.policyname, sorted(r.roles), r.with_check) for r in recreated],
+            [(r.policyname, sorted(r.roles), r.with_check) for r in stored.values()],
+        )
+
+    def _drop_role(self, role: str) -> None:
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"DROP ROLE {role}"))
+
     def _drop_schema(self, schema: str) -> None:
         with self.admin_engine.begin() as conn:
             conn.execute(sqlalchemy.text(f"DROP SCHEMA {schema} CASCADE"))

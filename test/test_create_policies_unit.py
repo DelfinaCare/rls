@@ -126,12 +126,8 @@ class TestCreatePolicies(unittest.TestCase):
         }
         executed_sqls = self._executed_sqls(Base)
         self.assertIn("ALTER TABLE my_table ENABLE ROW LEVEL SECURITY", executed_sqls)
-        self.assertNotIn(
-            "ALTER TABLE my_table FORCE ROW LEVEL SECURITY", executed_sqls
-        )
-        self.assertIn(
-            "ALTER TABLE my_table NO FORCE ROW LEVEL SECURITY", executed_sqls
-        )
+        self.assertNotIn("ALTER TABLE my_table FORCE ROW LEVEL SECURITY", executed_sqls)
+        self.assertIn("ALTER TABLE my_table NO FORCE ROW LEVEL SECURITY", executed_sqls)
         self.assertIn("ALTER TABLE forced FORCE ROW LEVEL SECURITY", executed_sqls)
 
     def test_identifiers_are_quoted(self):

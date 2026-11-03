@@ -383,6 +383,150 @@ class TestPolicyRenderPolicy(unittest.TestCase):
         self.assertEqual(stmt.compile().params, {})
         self.assertIn('CREATE POLICY "a :b" ON "t:x"', str(stmt))
 
+    def test_no_trailing_semicolon(self):
+        for cmd in policy.Command:
+            with self.subTest(cmd=cmd):
+                sql_text = str(self._make(cmd=cmd).render_policy("users"))
+                self.assertFalse(sql_text.rstrip().endswith(";"))
+
+    def test_all_uses_using_only_without_check_expr(self):
+        sql_text = str(self._make(cmd=policy.Command.all).render_policy("users"))
+        self.assertTrue(sql_text.endswith("USING (id = 1)"))
+
+    def test_update_check_expr_is_separate(self):
+        for cmd in (policy.Command.update, policy.Command.all):
+            with self.subTest(cmd=cmd):
+                p = policy.Policy(name="p", cmd=cmd, expr="id = 1", check_expr="id = 2")
+                self.assertTrue(
+                    str(p.render_policy("users")).endswith(
+                        "USING (id = 1) WITH CHECK (id = 2)"
+                    )
+                )
+
+    def test_update_without_check_expr_checks_using_expr(self):
+        sql_text = str(self._make(cmd=policy.Command.update).render_policy("users"))
+        self.assertTrue(sql_text.endswith("USING (id = 1) WITH CHECK (id = 1)"))
+
+    def test_check_expr_rejected_for_other_commands(self):
+        for cmd in (
+            policy.Command.select,
+            policy.Command.insert,
+            policy.Command.delete,
+        ):
+            with self.subTest(cmd=cmd), self.assertRaises(ValueError):
+                policy.Policy(name="p", cmd=cmd, expr="true", check_expr="true")
+
+    def test_roles(self):
+        for roles, expected in (
+            (("app",), " TO app USING"),
+            (("app", "My Role"), ' TO app, "My Role" USING'),
+            (("user",), ' TO "user" USING'),
+            (("public",), " TO PUBLIC USING"),
+            (("current_user", "SESSION_USER"), " TO CURRENT_USER, SESSION_USER USING"),
+            (("a:b",), ' TO "a:b" USING'),
+        ):
+            with self.subTest(roles=roles):
+                p = policy.Policy(name="p", expr="true", roles=roles)
+                stmt = p.render_policy("users")
+                self.assertEqual(stmt.compile().params, {})
+                self.assertIn(f"FOR ALL{expected}", str(stmt))
+
+    def test_no_roles_renders_no_to_clause(self):
+        self.assertNotIn(" TO ", str(self._make().render_policy("users")))
+
+    def test_empty_roles_rejected(self):
+        with self.assertRaises(ValueError):
+            policy.Policy(name="p", expr="true", roles=())
+
+
+def _from_sqla(**kwargs) -> policy.Policy:
+    return policy.Policy.from_sqla(
+        expr=kwargs.pop("expr", lambda x: sql.column("id") == x),
+        condition_args=[
+            policy.ConditionArg(comparator_name="account_id", type=sqlalchemy.Integer)
+        ],
+        cmd=kwargs.pop("cmd", policy.Command.update),
+        **kwargs,
+    )
+
+
+class TestPolicyCheckExprAndRoles(unittest.TestCase):
+    def test_check_expr_is_compiled_with_condition_args(self):
+        p = _from_sqla(check_expr=lambda x: sql.column("owner_id") == x)
+        assert p.check_expr is not None
+        self.assertIn("owner_id = CAST(", p.check_expr)
+        self.assertIn("rls.account_id", p.check_expr)
+        self.assertIn("rls.bypass_rls", p.check_expr)
+
+    def test_check_expr_respects_allow_bypass_rls(self):
+        p = _from_sqla(
+            check_expr=lambda x: sql.column("owner_id") == x, allow_bypass_rls=False
+        )
+        assert p.check_expr is not None
+        self.assertNotIn("bypass_rls", p.check_expr)
+
+    def test_check_expr_and_roles_change_name(self):
+        base = _from_sqla()
+        with_check = _from_sqla(check_expr=lambda x: sql.column("owner_id") == x)
+        with_roles = _from_sqla(roles=["app"])
+        other_roles = _from_sqla(roles=["other"])
+        names = {base.name, with_check.name, with_roles.name, other_roles.name}
+        self.assertEqual(len(names), 4)
+        for p in (with_check, with_roles, other_roles):
+            self.assertTrue(p.name.startswith("permissive_account_id_update_"))
+
+    def test_name_unchanged_without_check_expr_or_roles(self):
+        """Policies that do not use the new options keep their names."""
+        expected = policy._hashed_policy_name(
+            "permissive_account_id_update",
+            policy.PolicyType.permissive,
+            policy.Command.update,
+            _from_sqla().expr,
+        )
+        self.assertEqual(_from_sqla().name, expected)
+
+    def test_roles_stored_as_tuple(self):
+        self.assertEqual(_from_sqla(roles=["a", "b"]).roles, ("a", "b"))
+
+    def test_string_roles_rejected(self):
+        with self.assertRaises(TypeError):
+            _from_sqla(roles="app")
+
+    def test_comparator_names_recorded(self):
+        self.assertEqual(_from_sqla().comparator_names, ("account_id",))
+
+
+class TestConditionArgValidation(unittest.TestCase):
+    def test_invalid_comparator_names_rejected(self):
+        for name in ("", "account-id", "1abc", "rls.account_id", "a b", "bypass_rls"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                policy.ConditionArg(comparator_name=name, type=sqlalchemy.Integer)
+
+    def test_valid_comparator_names_accepted(self):
+        for name in ("account_id", "_x", "AccountId2"):
+            with self.subTest(name=name):
+                arg = policy.ConditionArg(comparator_name=name, type=sqlalchemy.Integer)
+                self.assertEqual(arg.comparator_name, name)
+
+
+class TestCheckUniquePolicyNames(unittest.TestCase):
+    def test_duplicates_raise(self):
+        p = _from_sqla()
+        with self.assertRaisesRegex(ValueError, p.name):
+            policy.check_unique_policy_names("t", [p, _from_sqla()])
+
+    def test_external_policy_name_collision_raises(self):
+        p = _from_sqla()
+        with self.assertRaises(ValueError):
+            policy.check_unique_policy_names(
+                "t", [p, policy.ExternalPolicy(name=p.name)]
+            )
+
+    def test_unique_names_pass(self):
+        policy.check_unique_policy_names(
+            "t", [_from_sqla(), _from_sqla(cmd=policy.Command.select)]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
