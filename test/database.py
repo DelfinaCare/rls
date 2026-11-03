@@ -29,7 +29,7 @@ def test_postgres_instance() -> TestPostgres:
     connection = inst.admin_engine.connect()
     models.Base.metadata.create_all(bind=inst.admin_engine)
     with connection.begin():
-        create_policies.create_policies(models.Base, connection)
+        create_policies.create_policies_no_commit(models.Base, connection)
 
     # Seed data
     user_values = []

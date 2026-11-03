@@ -506,10 +506,10 @@ class TestAlembicOperations(unittest.TestCase):
     def test_create_policies_quotes_identifiers(self):
         """create_policies works on reserved-word and mixed-case names."""
         QuotingBase = self._make_quoting_base()
-        with self.admin_engine.connect() as conn:
+        with self.admin_engine.begin() as conn:
             conn.execute(sqlalchemy.text('CREATE SCHEMA "MixedSchema"'))
             QuotingBase.metadata.create_all(conn)
-            create_policies.create_policies(QuotingBase, conn)
+            create_policies.create_policies_no_commit(QuotingBase, conn)
         self.addCleanup(self._drop_quoting_tables, QuotingBase.metadata)
 
         self.assertEqual(self._rls_flags("order"), (True, True))
@@ -517,6 +517,62 @@ class TestAlembicOperations(unittest.TestCase):
         self.assertEqual(self._rls_flags("MixedTable", "MixedSchema"), (True, True))
         self.assertEqual(len(self._quoting_policy_names()), 3)
         self.assertEqual(self._quoting_table_ops(QuotingBase.metadata), [])
+
+    def test_create_policies_is_idempotent_and_leaves_commit_to_caller(self):
+        """create_policies can be re-run and does not commit the transaction."""
+        QuotingBase = self._make_quoting_base()
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text('CREATE SCHEMA "MixedSchema"'))
+            QuotingBase.metadata.create_all(conn)
+        self.addCleanup(self._drop_quoting_tables, QuotingBase.metadata)
+
+        with self.admin_engine.connect() as conn, conn.begin() as trans:
+            create_policies.create_policies_no_commit(QuotingBase, conn)
+            trans.rollback()
+        self.assertEqual(self._quoting_policy_names(), set())
+        self.assertEqual(self._rls_flags("order"), (False, False))
+
+        for _ in range(2):
+            with self.admin_engine.begin() as conn:
+                create_policies.create_policies_no_commit(QuotingBase, conn)
+        self.assertEqual(len(self._quoting_policy_names()), 3)
+        self.assertEqual(self._quoting_table_ops(QuotingBase.metadata), [])
+
+    def test_unqualified_tables_use_current_schema(self):
+        """Unqualified tables are looked up in current_schema(), not public."""
+        schema = "rls_search_path_test"
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"CREATE SCHEMA {schema}"))
+            conn.execute(sqlalchemy.text(f"CREATE TABLE {schema}.sp (id int)"))
+            conn.execute(
+                sqlalchemy.text(f"ALTER TABLE {schema}.sp ENABLE ROW LEVEL SECURITY")
+            )
+            conn.execute(
+                sqlalchemy.text(f"ALTER TABLE {schema}.sp FORCE ROW LEVEL SECURITY")
+            )
+            conn.execute(
+                sqlalchemy.text(f"CREATE POLICY sp_policy ON {schema}.sp USING (true)")
+            )
+            # A same-named table in public must not be inspected instead.
+            conn.execute(sqlalchemy.text("CREATE TABLE public.sp (id int)"))
+        self.addCleanup(self._drop_schema, schema)
+        self.addCleanup(self._drop_table, "public.sp")
+
+        with self.admin_engine.connect() as conn:
+            conn.execute(sqlalchemy.text(f"SET search_path TO {schema}, public"))
+            self.assertTrue(alembic_ops.check_table_exists(conn, None, "sp"))
+            self.assertTrue(alembic_ops.check_rls_enabled(conn, None, "sp"))
+            self.assertTrue(alembic_ops.check_rls_forced(conn, None, "sp"))
+            self.assertEqual(
+                [p.name for p in alembic_ops.check_rls_policies(conn, None, "sp")],
+                ["sp_policy"],
+            )
+            self.assertFalse(alembic_ops.check_table_exists(conn, None, "missing"))
+            conn.rollback()
+
+    def _drop_table(self, name: str) -> None:
+        with self.admin_engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f"DROP TABLE IF EXISTS {name}"))
 
     def test_existing_policies_on_table_with_rls_disabled(self):
         """Autogenerate re-enables RLS without re-creating existing policies,

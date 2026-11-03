@@ -24,7 +24,7 @@ While it is set to `1`, `true`, `yes` or `on` (case-insensitive), autogenerate e
 
 ## Phase 2: declare existing policies as `ExternalPolicy`
 
-Next, let this package manage RLS, but declare every existing policy as an `ExternalPolicy`. An `ExternalPolicy` tells autogenerate that a policy with that name exists on the table and is managed elsewhere: it is never dropped (or created) by autogenerate, and `rls.create_policies` skips it.
+Next, let this package manage RLS, but declare every existing policy as an `ExternalPolicy`. An `ExternalPolicy` tells autogenerate that a policy with that name exists on the table and is managed elsewhere: it is never dropped (or created) by autogenerate, and `rls.create_policies.create_policies_no_commit` skips it.
 
 List the existing policies and RLS settings of each table with:
 

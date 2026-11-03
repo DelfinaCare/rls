@@ -163,13 +163,22 @@ def render_disable_rls(autogen_context, op):
     )
 
 
+def _schema_expr(schemaname: str | None) -> typing.Any:
+    """Return the schema to look a table up in.
+
+    Unqualified tables live in the connection's ``current_schema()`` (the
+    first existing schema on its ``search_path``), not necessarily ``public``.
+    """
+    return schemaname if schemaname is not None else sa.func.current_schema()
+
+
 def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     query: sa.Select = (
         sa.select(*[sa.column(c) for c in columns])
         .select_from(sa.table("pg_policies"))
-        .where(sa.column("schemaname") == (schemaname or "public"))
+        .where(sa.column("schemaname") == _schema_expr(schemaname))
         .where(sa.column("tablename") == tablename)
     )
     result = conn.execute(query).fetchall()
@@ -193,7 +202,7 @@ def check_table_exists(conn, schemaname, tablename) -> bool:
         sa.select(
             sa.select(sa.literal(1))
             .select_from(sa.table("tables", schema="information_schema"))
-            .where(sa.column("table_schema") == (schemaname or "public"))
+            .where(sa.column("table_schema") == _schema_expr(schemaname))
             .where(sa.column("table_name") == tablename)
             .exists()
         )
@@ -217,7 +226,7 @@ def _check_pg_class_flag(conn, schemaname, tablename, flag: str) -> bool:
         .select_from(
             pg_class.join(pg_namespace, pg_namespace.c.oid == pg_class.c.relnamespace)
         )
-        .where(pg_namespace.c.nspname == (schemaname or "public"))
+        .where(pg_namespace.c.nspname == _schema_expr(schemaname))
         .where(pg_class.c.relname == tablename)
     ).scalar()
     return bool(result)
