@@ -13,7 +13,8 @@ _CONDITION_ARGS_PREFIX = "rls"
 
 # Used to quote identifiers (reserved words, mixed case, special characters)
 # when building DDL statements.
-_IDENTIFIER_PREPARER = postgresql.dialect().identifier_preparer
+_POSTGRES_DIALECT = postgresql.dialect()
+_IDENTIFIER_PREPARER = _POSTGRES_DIALECT.identifier_preparer
 
 # Postgres silently truncates identifiers longer than NAMEDATALEN - 1 bytes.
 _MAX_IDENTIFIER_BYTES = 63
@@ -64,12 +65,23 @@ def quote_table(table_name: str, schemaname: str | None = None) -> str:
 
 
 class ConditionArg(pydantic.BaseModel):
+    """A context value referenced by a policy expression.
+
+    ``type`` is the SQLAlchemy type the value is cast to in the policy.  It
+    can be a type class (e.g. ``Integer``) or, when the type needs
+    arguments, an instance (e.g. ``DateTime(timezone=True)`` for
+    ``timestamptz`` or ``Enum(MyEnum, name="my_enum")`` for a native enum).
+    """
+
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
     comparator_name: str
-    type: type[sql.sqltypes.TypeEngine]
+    type: type[sql.sqltypes.TypeEngine] | sql.sqltypes.TypeEngine
 
 
 def _wrap_rls_value_setting(
-    value_name: str, value_type: type[sql.sqltypes.TypeEngine]
+    value_name: str,
+    value_type: type[sql.sqltypes.TypeEngine] | sql.sqltypes.TypeEngine,
 ) -> elements.ColumnElement:
     return sql.func.nullif(
         sql.func.current_setting(f"{_CONDITION_ARGS_PREFIX}.{value_name}", True),
@@ -109,7 +121,14 @@ def compile_sqla_expr(
             _wrap_rls_value_setting("bypass_rls", sqlalchemy.Boolean) == True,
         )
 
-    return str(clause_element.compile(compile_kwargs={"literal_binds": True}))
+    # Compile for PostgreSQL: the generic dialect renders some types with
+    # names Postgres does not have or that do not round-trip the value (e.g.
+    # DateTime as DATETIME, Uuid as CHAR(32)).
+    return str(
+        clause_element.compile(
+            dialect=_POSTGRES_DIALECT, compile_kwargs={"literal_binds": True}
+        )
+    )
 
 
 def _hashed_policy_name(
