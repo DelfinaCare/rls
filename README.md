@@ -133,13 +133,35 @@ __rls_policies__ = [
 `ConditionArg` describes a variable that will be set on the PostgreSQL session before a query runs, allowing the policy expression to reference it.
 
 - `comparator_name`: the PostgreSQL session variable name
-- `type`: the SQLAlchemy type of the variable
+- `type`: the SQLAlchemy type the variable is cast to, as a class or, for types that take arguments, an instance
 
 ```python
-from sqlalchemy import Integer
+from sqlalchemy import DateTime, Enum, Integer
 
 ConditionArg(comparator_name="account_id", type=Integer)
+ConditionArg(comparator_name="now", type=DateTime(timezone=True))  # timestamptz
+ConditionArg(
+    comparator_name="role",
+    type=Enum(Role, name="role", values_callable=lambda e: [m.value for m in e]),
+)
 ```
+
+The cast type should match the column the variable is compared with:
+
+| Context field type | `ConditionArg` type |
+|---|---|
+| `int` | `Integer` (or `BigInteger`, ...) |
+| `float` | `Float` |
+| `Decimal` | `Numeric` |
+| `str` | `String` / `Text` |
+| `bool` | `Boolean` |
+| `UUID` | `Uuid` |
+| `date` | `Date` |
+| `time` | `Time`, or `Time(timezone=True)` for `timetz` |
+| `datetime` | `DateTime`, or `DateTime(timezone=True)` for `timestamptz` |
+| enum | the column's type, e.g. `Integer`, `String` or a native `Enum(..., name=...)` |
+
+Casting an aware `datetime`/`time` to a type without time zone (`DateTime`, `Time`) discards its UTC offset, so use the `timezone=True` variants for aware values. Context enums are sent by `.value`, while SQLAlchemy's `Enum` stores member names by default, so pass `values_callable` (as above) when names and values differ.
 
 #### Commands
 

@@ -20,6 +20,14 @@ import sqlalchemy
 # Scalar types whose ``str()`` is a text representation PostgreSQL can cast
 # back to the matching column type in a policy expression.  Enums are handled
 # separately: they are rendered by their ``.value``.
+#
+# The policy casts the text with the ``ConditionArg.type`` it declares, e.g.
+# int -> Integer, float -> Float, Decimal -> Numeric, bool -> Boolean,
+# UUID -> Uuid, date -> Date, time -> Time (or ``Time(timezone=True)``),
+# datetime -> DateTime (or ``DateTime(timezone=True)``) and enums -> the
+# column's type, such as ``Enum(..., name=...)`` for a native enum.  Casting
+# an aware datetime/time to a type without time zone drops its offset.
+# test/test_context_types.py checks each of these against a real database.
 SUPPORTED_SCALAR_TYPES: tuple[type, ...] = (
     str,
     int,

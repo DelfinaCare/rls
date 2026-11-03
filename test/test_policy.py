@@ -50,6 +50,11 @@ class TestConditionArg(unittest.TestCase):
         self.assertEqual(arg.comparator_name, "org_name")
         self.assertEqual(arg.type, sqlalchemy.String)
 
+    def test_type_instance(self):
+        type_ = sqlalchemy.DateTime(timezone=True)
+        arg = policy.ConditionArg(comparator_name="now", type=type_)
+        self.assertIs(arg.type, type_)
+
 
 class TestCompileSqlaExpr(unittest.TestCase):
     def test_returns_sql_string(self):
@@ -150,6 +155,31 @@ class TestCompileSqlaExpr(unittest.TestCase):
             allow_bypass_rls=False,
         )
         self.assertNotIn("bypass_rls", result)
+
+    def test_casts_use_postgres_type_names(self):
+        for arg_type, cast in [
+            (sqlalchemy.Integer, "INTEGER"),
+            (sqlalchemy.DateTime, "TIMESTAMP WITHOUT TIME ZONE"),
+            (sqlalchemy.DateTime(timezone=True), "TIMESTAMP WITH TIME ZONE"),
+            (sqlalchemy.Time, "TIME WITHOUT TIME ZONE"),
+            (sqlalchemy.Time(timezone=True), "TIME WITH TIME ZONE"),
+            (sqlalchemy.Uuid, "UUID"),
+            (sqlalchemy.Interval, "INTERVAL"),
+            (sqlalchemy.Enum("a", "b", name="my_enum"), "my_enum"),
+        ]:
+            with self.subTest(arg_type):
+                result = policy.compile_sqla_expr(
+                    expr=lambda x: sql.column("value") == x,
+                    condition_args=[
+                        policy.ConditionArg(comparator_name="value", type=arg_type),
+                    ],
+                    allow_bypass_rls=False,
+                )
+                self.assertEqual(
+                    result,
+                    "value = CAST(nullif(current_setting('rls.value', true), '')"
+                    f" AS {cast})",
+                )
 
 
 class TestPolicyFromSqla(unittest.TestCase):
