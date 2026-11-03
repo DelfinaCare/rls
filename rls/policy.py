@@ -1,9 +1,9 @@
+import dataclasses
 import enum
 import hashlib
 import inspect
 import typing
 
-import pydantic
 import sqlalchemy
 from sqlalchemy import sql
 from sqlalchemy.dialects import postgresql
@@ -63,7 +63,8 @@ def quote_table(table_name: str, schemaname: str | None = None) -> str:
     return f"{_IDENTIFIER_PREPARER.quote_schema(schemaname)}.{quoted}"
 
 
-class ConditionArg(pydantic.BaseModel):
+@dataclasses.dataclass(kw_only=True)
+class ConditionArg:
     comparator_name: str
     type: type[sql.sqltypes.TypeEngine]
 
@@ -139,13 +140,19 @@ def _hashed_policy_name(
     return f"{base}_{digest}"
 
 
-class Policy(pydantic.BaseModel):
+@dataclasses.dataclass(kw_only=True)
+class Policy:
     """A single row-level security policy attached to a database table."""
 
     cmd: Command = Command.all
     expr: str
     name: str
     policy_type: PolicyType = PolicyType.permissive
+
+    def __post_init__(self) -> None:
+        # Accept the string values of the enums (e.g. ``"SELECT"``).
+        self.cmd = Command(self.cmd)
+        self.policy_type = PolicyType(self.policy_type)
 
     @classmethod
     def from_sqla(
@@ -204,7 +211,8 @@ class Policy(pydantic.BaseModel):
         return sqlalchemy.text(f"{header} {clauses}")
 
 
-class ExternalPolicy(pydantic.BaseModel):
+@dataclasses.dataclass(kw_only=True)
+class ExternalPolicy:
     """A row-level security policy managed outside of this package.
 
     List an ``ExternalPolicy`` in a model's ``__rls_policies__`` to declare

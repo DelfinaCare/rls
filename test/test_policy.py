@@ -281,6 +281,15 @@ class TestPolicyRenderPolicy(unittest.TestCase):
             policy_type=policy_type,
         )
 
+    def test_string_enum_values_are_coerced(self):
+        p = self._make(cmd="UPDATE", policy_type="RESTRICTIVE")
+        self.assertIs(p.cmd, policy.Command.update)
+        self.assertIs(p.policy_type, policy.PolicyType.restrictive)
+
+    def test_invalid_cmd_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(cmd="BOGUS")
+
     def test_select_uses_using(self):
         p = self._make(cmd=policy.Command.select)
         sql_text = str(p.render_policy("users"))
