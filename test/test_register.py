@@ -2,6 +2,7 @@ import types
 import typing
 import unittest
 
+import pydantic
 import sqlalchemy
 from sqlalchemy import orm
 
@@ -276,6 +277,110 @@ class TestRegister(unittest.TestCase):
             Base.metadata.info["rls_policies"],
             {"first": sample_policies, "second": sample_policies},
         )
+
+    def test_duplicate_policy_names_raise(self) -> None:
+        """Identical policies with the same base name would get the same name."""
+        sample_policies = self.sample_policies
+
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        with self.assertRaisesRegex(ValueError, "Duplicate RLS policy names"):
+
+            class Dup(Base):
+                __tablename__ = "dup"
+                id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+                __rls_policies__ = sample_policies * 2
+
+
+class _Context(pydantic.BaseModel):
+    account_id: int
+
+
+def _policies(comparator_name: str) -> list[policy.Policy | policy.ExternalPolicy]:
+    return [
+        policy.Policy.from_sqla(
+            expr=lambda x: sqlalchemy.sql.column("id") == x,
+            condition_args=[
+                policy.ConditionArg(
+                    comparator_name=comparator_name, type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=policy.Command.all,
+        ),
+        policy.ExternalPolicy(name="external"),
+    ]
+
+
+class TestValidateContext(unittest.TestCase):
+    def test_validate_context_accepts_matching_fields(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class Ok(Base):
+            __tablename__ = "ok"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _policies("account_id")
+
+        register.validate_context(Base, _Context)
+
+    def test_validate_context_rejects_typo(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base)
+
+        class Typo(Base):
+            __tablename__ = "typo"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _policies("acount_id")
+
+        with self.assertRaisesRegex(ValueError, "acount_id"):
+            register.validate_context(Base, _Context)
+
+    def test_validate_context_requires_registration(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        with self.assertRaises(ValueError):
+            register.validate_context(Base, _Context)
+
+    def test_base_wrapper_validates_existing_models(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        class Typo(Base):
+            __tablename__ = "typo"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _policies("acount_id")
+
+        with self.assertRaisesRegex(ValueError, "acount_id"):
+            register.base_wrapper(Base, context_model=_Context)
+
+    def test_base_wrapper_validates_later_models(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        register.base_wrapper(Base, context_model=_Context)
+
+        class Ok(Base):
+            __tablename__ = "ok"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _policies("account_id")
+
+        with self.assertRaisesRegex(ValueError, "acount_id"):
+
+            class Typo(Base):
+                __tablename__ = "typo"
+                id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+                __rls_policies__ = _policies("acount_id")
+
+    def test_test_models_match_sample_context(self) -> None:
+        register.validate_context(models.Base, models.SampleRlsContext)
 
 
 if __name__ == "__main__":

@@ -799,6 +799,53 @@ class AsyncRLSRegressionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(orm.exc.StaleDataError):
                 await rls_sess.flush()
 
+    async def _item_owned_by(
+        self, rls_sess: session.AsyncRlsSession, owner_id: int
+    ) -> models.Item:
+        item = (
+            await rls_sess.scalars(
+                sqlalchemy.select(models.Item).where(models.Item.owner_id == owner_id)
+            )
+        ).first()
+        assert item is not None
+        return item
+
+    async def test_lazy_load_applies_context(self):
+        """Lazy loads through AsyncAttrs run with the session's context."""
+        # Account 1 can see items owned by account 2, but not account 2's user.
+        await self._use_account(2)
+        async with self._new_session(1) as rls_sess:
+            item = await self._item_owned_by(rls_sess, 2)
+            self.assertIsNone(await item.awaitable_attrs.owner)
+        async with self._new_session(2) as rls_sess:
+            item = await self._item_owned_by(rls_sess, 2)
+            owner = await item.awaitable_attrs.owner
+            assert owner is not None
+            self.assertEqual(owner.id, 2)
+
+    async def test_lazy_load_inside_bypass(self):
+        async with self._new_session(1) as rls_sess:
+            item = await self._item_owned_by(rls_sess, 2)
+            async with rls_sess.bypass_rls():
+                owner = await item.awaitable_attrs.owner
+            assert owner is not None
+            self.assertEqual(owner.id, 2)
+
+    async def test_orm_insert_checked_with_own_context(self):
+        """ORM INSERTs are checked against the session's context."""
+        await self._use_account(2)
+        async with self._new_session(1) as rls_sess:
+            item = models.Item(title="new", owner_id=1)
+            rls_sess.add(item)
+            await rls_sess.flush()
+            self.assertIsNotNone(item.id)
+            await rls_sess.rollback()
+            rls_sess.add(models.Item(title="new", owner_id=2))
+            with self.assertRaisesRegex(
+                sqlalchemy.exc.ProgrammingError, "row-level security"
+            ):
+                await rls_sess.flush()
+
     async def test_settings_do_not_leak_to_none_context_session(self):
         """A pooled connection must not carry a previous session's context."""
         await self._use_account(1)

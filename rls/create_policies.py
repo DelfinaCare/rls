@@ -36,12 +36,13 @@ def create_policies_no_commit(
     for table, rls_settings in Base.metadata.info["rls_policies"].items():
         if not rls_settings:
             continue
+        policy_module.check_unique_policy_names(table, rls_settings)
         tablename, schemaname = _split_table_name(Base.metadata, table)
         quoted_table = policy_module.quote_table(tablename, schemaname).replace(
             ":", "\\:"
         )
         # enable
-        stmt = sqlalchemy.text(f"ALTER TABLE {quoted_table} ENABLE ROW LEVEL SECURITY;")
+        stmt = sqlalchemy.text(f"ALTER TABLE {quoted_table} ENABLE ROW LEVEL SECURITY")
         connection.execute(stmt)
         # force unless the table opted out (NO FORCE keeps re-runs consistent)
         mode = policy_module.RlsMode(
@@ -52,9 +53,7 @@ def create_policies_no_commit(
         force = (
             "FORCE" if mode == policy_module.RlsMode.enable_and_force else "NO FORCE"
         )
-        stmt = sqlalchemy.text(
-            f"ALTER TABLE {quoted_table} {force} ROW LEVEL SECURITY;"
-        )
+        stmt = sqlalchemy.text(f"ALTER TABLE {quoted_table} {force} ROW LEVEL SECURITY")
         connection.execute(stmt)
         # policies (external policies are managed elsewhere)
         for policy in rls_settings:
@@ -65,7 +64,7 @@ def create_policies_no_commit(
             )
             connection.execute(
                 sqlalchemy.text(
-                    f"DROP POLICY IF EXISTS {quoted_policy} ON {quoted_table};"
+                    f"DROP POLICY IF EXISTS {quoted_policy} ON {quoted_table}"
                 )
             )
             connection.execute(

@@ -40,8 +40,8 @@ Policies declared as `ExternalPolicy` are managed outside of this package: autog
 
 **Note**: generated policy names end with a short base-36 hash (`0-9a-z`) of the policy definition (e.g. `permissive_account_id_select_k3x9q2m7`). Postgres rewrites policy expressions when storing them, so autogenerate detects changes by comparing policy names rather than expressions: when a policy's definition changes, its name changes, and autogenerate drops the old policy and creates the new one.
 
-### op.create_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str, schemaname: str | None = None)
-Creates a policy for a table with the given name, policy type, policy name, command, and expression. The expression is used as-is, so any `rls.bypass_rls` clause must already be part of it.
+### op.create_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str, schemaname: str | None = None, check_expr: str | None = None, roles: list[str] | None = None)
+Creates a policy for a table with the given name, policy type, policy name, command, and expression. The expressions are used as-is, so any `rls.bypass_rls` clause must already be part of them. `check_expr` is an optional separate `WITH CHECK` expression for `UPDATE` and `ALL` policies, and `roles` the roles the policy applies to (`TO ...`, all roles if omitted). Autogenerate only renders `check_expr` and `roles` when they are set.
 
 ```python
 from alembic import op
@@ -55,7 +55,7 @@ op.create_policy(
 )
 ```
 
-### op.drop_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str, schemaname: str | None = None)
+### op.drop_policy(table_name: str, policy_name: str, policy_type: str, cmd: str, expr: str, schemaname: str | None = None, check_expr: str | None = None, roles: list[str] | None = None)
 Drops a policy for a table with the given name, policy name, command, and expression
 
 ```python
@@ -70,7 +70,7 @@ op.drop_policy(
 )
 ```
 
-**Note**: the `expr`, `cmd`, `policy_type` are not used in the drop operation but it is required to be passed for reverse compatibility
+**Note**: the `expr`, `cmd`, `policy_type` (and the optional `check_expr` and `roles`) are not used in the drop operation but are kept so the operation can be reversed
 
 
 ### op.enable_rls(tablename: str, schemaname: str | None = None, force: bool = True)

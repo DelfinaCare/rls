@@ -344,7 +344,7 @@ class TestDropPolicyImpl(unittest.TestCase):
             expr="id = 1",
         )
         alembic_ops.drop_policy(ops, operation)
-        ops.execute.assert_called_once_with("DROP POLICY pol1 ON users;")
+        ops.execute.assert_called_once_with("DROP POLICY pol1 ON users")
 
 
 class TestRenderCreatePolicy(unittest.TestCase):
@@ -941,7 +941,7 @@ class TestSchemaQualifiedPolicyOps(unittest.TestCase):
     def test_drop_policy_uses_schema(self):
         ops = _mock_operations()
         alembic_ops.drop_policy(ops, self._create_op().reverse())
-        ops.execute.assert_called_once_with("DROP POLICY pol1 ON myschema.users;")
+        ops.execute.assert_called_once_with("DROP POLICY pol1 ON myschema.users")
 
     def test_reverse_keeps_schema(self):
         rev = self._create_op().reverse()
@@ -1022,7 +1022,7 @@ class TestIdentifierQuoting(unittest.TestCase):
         ops = _mock_operations()
         alembic_ops.drop_policy(ops, self._policy_op().reverse())
         ops.execute.assert_called_once_with(
-            'DROP POLICY "My Policy" ON "MySchema"."user";'
+            'DROP POLICY "My Policy" ON "MySchema"."user"'
         )
 
     def test_colons_in_identifiers_are_not_bind_params(self):
@@ -1032,7 +1032,118 @@ class TestIdentifierQuoting(unittest.TestCase):
         )
         stmt = sqlalchemy.text(ops.execute.call_args[0][0])
         self.assertEqual(stmt.compile().params, {})
-        self.assertEqual(str(stmt), 'DROP POLICY "a :b" ON "MySchema"."t:x";')
+        self.assertEqual(str(stmt), 'DROP POLICY "a :b" ON "MySchema"."t:x"')
+
+
+class TestCheckExprAndRoles(unittest.TestCase):
+    def _op_kwargs(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
+        return {
+            "table_name": "users",
+            "policy_name": "pol1",
+            "policy_type": "PERMISSIVE",
+            "cmd": "UPDATE",
+            "expr": "id = 1",
+            **kwargs,
+        }
+
+    def test_reads_roles_and_check_expr_from_db(self) -> None:
+        conn = mock.MagicMock()
+        conn.execute.return_value.fetchall.return_value = [
+            ("all_pol", "PERMISSIVE", "ALL", ["public"], "a", None),
+            ("upd_pol", "PERMISSIVE", "UPDATE", ["app", "admin"], "a", "b"),
+            ("upd_same", "PERMISSIVE", "UPDATE", ["public"], "a", "a"),
+            ("ins_pol", "RESTRICTIVE", "INSERT", ["app"], None, "c"),
+        ]
+        policies = {
+            p.name: p for p in alembic_ops.check_rls_policies(conn, None, "users")
+        }
+        self.assertIsNone(policies["all_pol"].roles)
+        self.assertIsNone(policies["all_pol"].check_expr)
+        self.assertEqual(policies["upd_pol"].roles, ("app", "admin"))
+        self.assertEqual(policies["upd_pol"].expr, "a")
+        self.assertEqual(policies["upd_pol"].check_expr, "b")
+        self.assertIsNone(policies["upd_same"].check_expr)
+        self.assertEqual(policies["ins_pol"].expr, "c")
+        self.assertIsNone(policies["ins_pol"].check_expr)
+        self.assertEqual(policies["ins_pol"].roles, ("app",))
+
+    def test_create_policy_renders_check_expr_and_roles(self) -> None:
+        ops = _mock_operations()
+        alembic_ops.create_policy(
+            ops,
+            alembic_ops.CreatePolicyOp(
+                **self._op_kwargs(check_expr="id = 2", roles=["app"])
+            ),
+        )
+        self.assertEqual(
+            str(ops.execute.call_args[0][0]),
+            "CREATE POLICY pol1 ON users AS PERMISSIVE FOR UPDATE TO app "
+            "USING (id = 1) WITH CHECK (id = 2)",
+        )
+
+    def test_reverse_keeps_check_expr_and_roles(self) -> None:
+        op = alembic_ops.CreatePolicyOp(
+            **self._op_kwargs(check_expr="id = 2", roles=["app"])
+        )
+        rev = op.reverse()
+        self.assertIsInstance(rev, alembic_ops.DropPolicyOp)
+        self.assertEqual(rev.check_expr, "id = 2")
+        self.assertEqual(rev.roles, ("app",))
+        back = rev.reverse()
+        self.assertIsInstance(back, alembic_ops.CreatePolicyOp)
+        self.assertEqual(back.roles, ("app",))
+
+    def test_renderers_include_check_expr_and_roles_only_when_set(self) -> None:
+        renderers: list[tuple[typing.Callable[..., str], type[typing.Any]]] = [
+            (alembic_ops.render_create_policy, alembic_ops.CreatePolicyOp),
+            (alembic_ops.render_drop_policy, alembic_ops.DropPolicyOp),
+        ]
+        for render, op_class in renderers:
+            with self.subTest(render=render.__name__):
+                plain = render(_mock_autogen_context(), op_class(**self._op_kwargs()))
+                self.assertNotIn("check_expr", plain)
+                self.assertNotIn("roles", plain)
+                full = render(
+                    _mock_autogen_context(),
+                    op_class(
+                        **self._op_kwargs(check_expr="id = 2", roles=["app"]),
+                        schemaname="s",
+                    ),
+                )
+                self.assertTrue(
+                    full.endswith(
+                        "expr='id = 1', check_expr='id = 2', roles=['app'], "
+                        "schemaname='s')"
+                    )
+                )
+
+    def test_compare_creates_policy_with_check_expr_and_roles(self) -> None:
+        meta_policy = policy.Policy.from_sqla(
+            expr=lambda x: sql.column("id") == x,
+            check_expr=lambda x: sql.column("id") > x,
+            condition_args=[
+                policy.ConditionArg(
+                    comparator_name="account_id", type=sqlalchemy.Integer
+                ),
+            ],
+            cmd=policy.Command.update,
+            roles=["app"],
+        )
+        modify_ops = TestCompareTableLevel()._build_context(
+            table_exists=True,
+            rls_enabled=True,
+            meta_policies={"users": [meta_policy]},
+        )
+        (create_op,) = modify_ops.ops
+        self.assertIsInstance(create_op, alembic_ops.CreatePolicyOp)
+        self.assertEqual(create_op.check_expr, meta_policy.check_expr)
+        self.assertEqual(create_op.roles, ("app",))
+
+    def test_compare_rejects_duplicate_policy_names(self) -> None:
+        with self.assertRaises(ValueError):
+            TestCompareTableLevel()._build_context(
+                meta_policies={"users": [_sample_policy(), _sample_policy()]},
+            )
 
 
 if __name__ == "__main__":
