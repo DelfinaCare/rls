@@ -187,7 +187,7 @@ def _hashed_policy_name(
     if check_expr is not None:
         policy_sql += f" WITH CHECK {check_expr}"
     if roles is not None:
-        policy_sql += f" TO {', '.join(render_role(role) for role in roles)}"
+        policy_sql += f" TO {', '.join(render_role(role) for role in sorted(roles))}"
     value = int.from_bytes(hashlib.sha256(policy_sql.encode("utf-8")).digest())
     base_len = len(_POLICY_HASH_ALPHABET)
     chars = []
