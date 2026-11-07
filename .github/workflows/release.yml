@@ -29,24 +29,23 @@ jobs:
         name: wheel
         path: ./rls*.whl
 
-  # The rls package is claimed in test, so we skip this.
-  # upload_wheel_test:
-  #   needs: [build_wheel]
-  #   runs-on: ubuntu-latest
-  #   if: github.repository_owner == 'DelfinaCare' && github.ref == 'refs/heads/main'
-  #   environment:
-  #       name: pypi-test
-  #       url: https://test.pypi.org/p/rls
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-  #       with:
-  #           name: wheel
-  #           path: dist/
-  #     - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-  #       with:
-  #           repository-url: https://test.pypi.org/legacy/
+  upload_wheel_test:
+    needs: [build_wheel]
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'DelfinaCare' && github.ref == 'refs/heads/main'
+    environment:
+        name: pypi-test
+        url: https://test.pypi.org/p/rls
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+            name: wheel
+            path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+            repository-url: https://test.pypi.org/legacy/
 
   upload_wheel:
     needs: [build_wheel]
