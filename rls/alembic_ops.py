@@ -4,6 +4,8 @@ import typing
 import sqlalchemy as sa
 from alembic import autogenerate
 from alembic import operations as alembic_operations
+from alembic.autogenerate import api as autogenerate_api
+from alembic.operations import ops as migrate_ops
 
 from . import policy
 
@@ -26,17 +28,24 @@ def alembic_generation_suppressed() -> bool:
 class EnableRlsOp(alembic_operations.MigrateOperation):
     """Enable RowLevelSecurity, forcing it unless ``force`` is False."""
 
-    def __init__(self, tablename, schemaname=None, force=True):
+    def __init__(
+        self, tablename: str, schemaname: str | None = None, force: bool = True
+    ) -> None:
         self.tablename = tablename
         self.schemaname = schemaname
         self.force = force
 
     @classmethod
-    def enable_rls(cls, operations, tablename, **kw):
+    def enable_rls(
+        cls,
+        operations: alembic_operations.Operations,
+        tablename: str,
+        **kw: typing.Any,
+    ) -> None:
         op = EnableRlsOp(tablename, **kw)
-        return operations.invoke(op)
+        operations.invoke(op)
 
-    def reverse(self):
+    def reverse(self) -> "DisableRlsOp":
         # only needed to support autogenerate
         return DisableRlsOp(self.tablename, schemaname=self.schemaname)
 
@@ -45,16 +54,21 @@ class EnableRlsOp(alembic_operations.MigrateOperation):
 class DisableRlsOp(alembic_operations.MigrateOperation):
     """Disable RowLevelSecurity."""
 
-    def __init__(self, tablename, schemaname=None):
+    def __init__(self, tablename: str, schemaname: str | None = None) -> None:
         self.tablename = tablename
         self.schemaname = schemaname
 
     @classmethod
-    def disable_rls(cls, operations, tablename, **kw):
+    def disable_rls(
+        cls,
+        operations: alembic_operations.Operations,
+        tablename: str,
+        **kw: typing.Any,
+    ) -> None:
         op = DisableRlsOp(tablename, **kw)
-        return operations.invoke(op)
+        operations.invoke(op)
 
-    def reverse(self):
+    def reverse(self) -> EnableRlsOp:
         # only needed to support autogenerate
         return EnableRlsOp(self.tablename, schemaname=self.schemaname)
 
@@ -76,7 +90,9 @@ def _escape_colons(sql: str) -> str:
 
 
 @alembic_operations.Operations.implementation_for(EnableRlsOp)
-def enable_rls(operations, operation):
+def enable_rls(
+    operations: alembic_operations.Operations, operation: EnableRlsOp
+) -> None:
     name = _ddl_table_name(operation.tablename, operation.schemaname)
     operations.execute(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY")
     # Table owners bypass RLS unless it is forced.  Migrations usually run as
@@ -88,7 +104,9 @@ def enable_rls(operations, operation):
 
 
 @alembic_operations.Operations.implementation_for(DisableRlsOp)
-def disable_rls(operations, operation):
+def disable_rls(
+    operations: alembic_operations.Operations, operation: DisableRlsOp
+) -> None:
     name = _ddl_table_name(operation.tablename, operation.schemaname)
     operations.execute(f"ALTER TABLE {name} NO FORCE ROW LEVEL SECURITY")
     operations.execute(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY")
@@ -119,6 +137,8 @@ class RLSOp(typing.Protocol):
         cmd: str,
         expr: str,
         schemaname: str | None = None,
+        check_expr: str | None = None,
+        roles: typing.Sequence[str] | None = None,
         **kw: typing.Any,
     ) -> None: ...
 
@@ -130,11 +150,13 @@ class RLSOp(typing.Protocol):
         cmd: str,
         expr: str,
         schemaname: str | None = None,
+        check_expr: str | None = None,
+        roles: typing.Sequence[str] | None = None,
         **kw: typing.Any,
     ) -> None: ...
 
 
-def _add_rls_imports(autogen_context: typing.Any) -> None:
+def _add_rls_imports(autogen_context: autogenerate_api.AutogenContext) -> None:
     """Inject the imports needed to use ``typing.cast(alembic_ops.RLSOp, op)`` in a migration file."""
     autogen_context.imports.add("import typing")
     autogen_context.imports.add("from rls import alembic_ops")
@@ -145,7 +167,9 @@ def _render_schemaname(schemaname: str | None) -> str:
 
 
 @autogenerate.renderers.dispatch_for(EnableRlsOp)
-def render_enable_rls(autogen_context, op):
+def render_enable_rls(
+    autogen_context: autogenerate_api.AutogenContext, op: EnableRlsOp
+) -> str:
     _add_rls_imports(autogen_context)
     return (
         f"typing.cast(alembic_ops.RLSOp, op).enable_rls({op.tablename!r}"
@@ -155,7 +179,9 @@ def render_enable_rls(autogen_context, op):
 
 
 @autogenerate.renderers.dispatch_for(DisableRlsOp)
-def render_disable_rls(autogen_context, op):
+def render_disable_rls(
+    autogen_context: autogenerate_api.AutogenContext, op: DisableRlsOp
+) -> str:
     _add_rls_imports(autogen_context)
     return (
         f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r}"
@@ -172,7 +198,16 @@ def _schema_expr(schemaname: str | None) -> typing.Any:
     return schemaname if schemaname is not None else sa.func.current_schema()
 
 
-def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
+def _roles_from_db(roles: typing.Sequence[str] | None) -> tuple[str, ...] | None:
+    """Return the roles of a stored policy, or None if it applies to PUBLIC."""
+    if not roles or list(roles) == ["public"]:
+        return None
+    return tuple(roles)
+
+
+def check_rls_policies(
+    conn: sa.Connection, schemaname: str | None, tablename: str
+) -> list[policy.Policy]:
     """Retrieve all RLS policies applied to a table from the database."""
     columns = ["policyname", "permissive", "cmd", "roles", "qual", "with_check"]
     query: sa.Select = (
@@ -186,18 +221,34 @@ def check_rls_policies(conn, schemaname, tablename) -> list[policy.Policy]:
     policies = []
     for row in result:
         policy_data = dict(zip(columns, row))
+        cmd = policy.Command(policy_data["cmd"])
+        qual = policy_data["qual"]
+        with_check = policy_data["with_check"]
+        # INSERT policies only have a WITH CHECK expression; other policies
+        # only have a separate one if it differs from USING.
+        separate_check = (
+            with_check
+            if cmd in (policy.Command.all, policy.Command.update)
+            and qual is not None
+            and with_check != qual
+            else None
+        )
         p = policy.Policy(
             name=policy_data["policyname"],
-            cmd=policy.Command(policy_data["cmd"]),
-            expr=policy_data.get("with_check") or policy_data.get("qual") or "",
+            cmd=cmd,
+            expr=qual or with_check or "",
             policy_type=policy.PolicyType(policy_data["permissive"]),
+            check_expr=separate_check,
+            roles=_roles_from_db(policy_data["roles"]),
         )
         policies.append(p)
 
     return policies
 
 
-def check_table_exists(conn, schemaname, tablename) -> bool:
+def check_table_exists(
+    conn: sa.Connection, schemaname: str | None, tablename: str
+) -> bool:
     result = conn.execute(
         sa.select(
             sa.select(sa.literal(1))
@@ -207,10 +258,12 @@ def check_table_exists(conn, schemaname, tablename) -> bool:
             .exists()
         )
     ).scalar()
-    return result
+    return bool(result)
 
 
-def _check_pg_class_flag(conn, schemaname, tablename, flag: str) -> bool:
+def _check_pg_class_flag(
+    conn: sa.Connection, schemaname: str | None, tablename: str, flag: str
+) -> bool:
     pg_class = sa.table(
         "pg_class",
         sa.column("relname"),
@@ -232,11 +285,15 @@ def _check_pg_class_flag(conn, schemaname, tablename, flag: str) -> bool:
     return bool(result)
 
 
-def check_rls_enabled(conn, schemaname, tablename) -> bool:
+def check_rls_enabled(
+    conn: sa.Connection, schemaname: str | None, tablename: str
+) -> bool:
     return _check_pg_class_flag(conn, schemaname, tablename, "relrowsecurity")
 
 
-def check_rls_forced(conn, schemaname, tablename) -> bool:
+def check_rls_forced(
+    conn: sa.Connection, schemaname: str | None, tablename: str
+) -> bool:
     return _check_pg_class_flag(conn, schemaname, tablename, "relforcerowsecurity")
 
 
@@ -247,41 +304,45 @@ def _cmd_value(cmd: policy.Command | str) -> str:
 
 @autogenerate.comparators.dispatch_for("table")
 def compare_table_level(
-    autogen_context, modify_ops, schemaname, tablename, conn_table, metadata_table
-):
+    autogen_context: autogenerate_api.AutogenContext,
+    modify_ops: migrate_ops.ModifyTableOps,
+    schemaname: str | None,
+    tablename: str,
+    conn_table: sa.Table | None,
+    metadata_table: sa.Table | None,
+) -> None:
     if metadata_table is None:
         # The table is being dropped, which also drops its policies.
         return
     if alembic_generation_suppressed():
         return
+    connection = autogen_context.connection
+    assert connection is not None, "RLS autogenerate requires a database connection"
 
     # STEP 1. check if the table exists
-    table_exists = check_table_exists(autogen_context.connection, schemaname, tablename)
+    table_exists = check_table_exists(connection, schemaname, tablename)
 
     # STEP 2. Retrieve current RLS policies from the database.  Policies are
     # read even if RLS is disabled on the table, since they still exist and
     # must not be re-created (or must be dropped if no longer wanted).
     rls_enabled_db = (
-        check_rls_enabled(autogen_context.connection, schemaname, tablename)
-        if table_exists
-        else False
+        check_rls_enabled(connection, schemaname, tablename) if table_exists else False
     )
     rls_policies_db = (
-        check_rls_policies(autogen_context.connection, schemaname, tablename)
-        if table_exists
-        else []
+        check_rls_policies(connection, schemaname, tablename) if table_exists else []
     )
 
     rls_forced_db = (
-        check_rls_forced(autogen_context.connection, schemaname, tablename)
-        if rls_enabled_db
-        else False
+        check_rls_forced(connection, schemaname, tablename) if rls_enabled_db else False
     )
 
     # STEP 3. Get RLS policies defined in the metadata.  They are registered
     # under the table's schema-qualified name (``Table.fullname``).
     rls_policies_meta = metadata_table.metadata.info["rls_policies"].get(
         _qualified_name(tablename, schemaname), []
+    )
+    policy.check_unique_policy_names(
+        _qualified_name(tablename, schemaname), rls_policies_meta
     )
     rls_enabled_meta = bool(rls_policies_meta)
     rls_mode_meta = policy.RlsMode(
@@ -326,6 +387,8 @@ def compare_table_level(
                 cmd=_cmd_value(policy_meta.cmd),
                 expr=policy_meta.expr,
                 schemaname=schemaname,
+                check_expr=policy_meta.check_expr,
+                roles=policy_meta.roles,
             )
         )
 
@@ -341,64 +404,100 @@ def compare_table_level(
                     cmd=_cmd_value(policy_db.cmd),
                     expr=policy_db.expr,
                     schemaname=schemaname,
+                    check_expr=policy_db.check_expr,
+                    roles=policy_db.roles,
                 )
             )
     modify_ops.ops.extend(create_ops)
 
 
-@alembic_operations.Operations.register_operation("create_policy")
-class CreatePolicyOp(alembic_operations.MigrateOperation):
-    """Operation to create a new RLS policy."""
+class _PolicyOp(alembic_operations.MigrateOperation):
+    """Base class of the operations that create or drop an RLS policy."""
 
     def __init__(
-        self, table_name, policy_name, policy_type, cmd, expr, schemaname=None
-    ):
+        self,
+        table_name: str,
+        policy_name: str,
+        policy_type: str,
+        cmd: str,
+        expr: str,
+        schemaname: str | None = None,
+        check_expr: str | None = None,
+        roles: typing.Sequence[str] | None = None,
+    ) -> None:
         self.table_name = table_name
         self.policy_type = policy_type
         self.cmd = cmd
         self.expr = expr
         self.policy_name = policy_name
         self.schemaname = schemaname
+        self.check_expr = check_expr
+        self.roles = tuple(roles) if roles is not None else None
+
+    def _kwargs(self) -> dict[str, typing.Any]:
+        return {
+            "table_name": self.table_name,
+            "policy_name": self.policy_name,
+            "policy_type": self.policy_type,
+            "cmd": self.cmd,
+            "expr": self.expr,
+            "schemaname": self.schemaname,
+            "check_expr": self.check_expr,
+            "roles": self.roles,
+        }
+
+    def to_policy(self) -> policy.Policy:
+        return policy.Policy(
+            name=self.policy_name,
+            cmd=policy.Command(self.cmd),
+            expr=self.expr,
+            policy_type=policy.PolicyType(self.policy_type),
+            check_expr=self.check_expr,
+            roles=self.roles,
+        )
+
+
+@alembic_operations.Operations.register_operation("create_policy")
+class CreatePolicyOp(_PolicyOp):
+    """Operation to create a new RLS policy."""
 
     @classmethod
-    def create_policy(cls, operations, table_name, policy_type, cmd, expr, **kw):
+    def create_policy(
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        policy_type: str,
+        cmd: str,
+        expr: str,
+        **kw: typing.Any,
+    ) -> None:
         op = CreatePolicyOp(
             table_name=table_name, policy_type=policy_type, cmd=cmd, expr=expr, **kw
         )
-        return operations.invoke(op)
+        operations.invoke(op)
 
-    def reverse(self):
-        return DropPolicyOp(
-            table_name=self.table_name,
-            policy_name=self.policy_name,
-            policy_type=self.policy_type,
-            cmd=self.cmd,
-            expr=self.expr,
-            schemaname=self.schemaname,
-        )
+    def reverse(self) -> "DropPolicyOp":
+        return DropPolicyOp(**self._kwargs())
 
     def to_diff_tuple(self) -> tuple:
         return ("create_policy", self.table_name, self.policy_name)
 
 
 @alembic_operations.Operations.register_operation("drop_policy")
-class DropPolicyOp(alembic_operations.MigrateOperation):
+class DropPolicyOp(_PolicyOp):
     """Operation to drop an RLS policy."""
-
-    def __init__(
-        self, table_name, policy_name, policy_type, cmd, expr, schemaname=None
-    ):
-        self.table_name = table_name
-        self.policy_type = policy_type
-        self.cmd = cmd
-        self.expr = expr
-        self.policy_name = policy_name
-        self.schemaname = schemaname
 
     @classmethod
     def drop_policy(
-        cls, operations, table_name, policy_name, policy_type, cmd, expr, **kw
-    ):
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        policy_name: str,
+        policy_type: str,
+        cmd: str,
+        expr: str,
+        **kw: typing.Any,
+    ) -> None:
         op = DropPolicyOp(
             table_name=table_name,
             policy_name=policy_name,
@@ -407,60 +506,63 @@ class DropPolicyOp(alembic_operations.MigrateOperation):
             expr=expr,
             **kw,
         )
-        return operations.invoke(op)
+        operations.invoke(op)
 
-    def reverse(self):
-        return CreatePolicyOp(
-            table_name=self.table_name,
-            policy_name=self.policy_name,
-            policy_type=self.policy_type,
-            cmd=self.cmd,
-            expr=self.expr,
-            schemaname=self.schemaname,
-        )
+    def reverse(self) -> CreatePolicyOp:
+        return CreatePolicyOp(**self._kwargs())
 
     def to_diff_tuple(self) -> tuple:
         return ("drop_policy", self.table_name, self.policy_name)
 
 
 @alembic_operations.Operations.implementation_for(CreatePolicyOp)
-def create_policy(operations, operation):
-    p = policy.Policy(
-        name=operation.policy_name,
-        cmd=policy.Command(operation.cmd),
-        expr=operation.expr,
-        policy_type=policy.PolicyType(operation.policy_type),
-    )
+def create_policy(
+    operations: alembic_operations.Operations, operation: CreatePolicyOp
+) -> None:
     operations.execute(
-        p.render_policy(operation.table_name, schemaname=operation.schemaname)
+        operation.to_policy().render_policy(
+            operation.table_name, schemaname=operation.schemaname
+        )
     )
 
 
 @alembic_operations.Operations.implementation_for(DropPolicyOp)
-def drop_policy(operations, operation):
+def drop_policy(
+    operations: alembic_operations.Operations, operation: DropPolicyOp
+) -> None:
     table_name = _ddl_table_name(operation.table_name, operation.schemaname)
     policy_name = _escape_colons(policy.quote_identifier(operation.policy_name))
-    sql = f"DROP POLICY {policy_name} ON {table_name};"
-    operations.execute(sql)
+    operations.execute(f"DROP POLICY {policy_name} ON {table_name}")
+
+
+def _render_policy_op(
+    autogen_context: autogenerate_api.AutogenContext, method: str, op: _PolicyOp
+) -> str:
+    _add_rls_imports(autogen_context)
+    # Optional arguments are only rendered when set, so migrations of
+    # policies that do not use them are unchanged.
+    optional = ""
+    if op.check_expr is not None:
+        optional += f", check_expr={op.check_expr!r}"
+    if op.roles is not None:
+        optional += f", roles={list(op.roles)!r}"
+    return (
+        f"typing.cast(alembic_ops.RLSOp, op).{method}("
+        f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
+        f"cmd={op.cmd!r}, policy_type={op.policy_type!r}, expr={op.expr!r}"
+        f"{optional}{_render_schemaname(op.schemaname)})"
+    )
 
 
 @autogenerate.renderers.dispatch_for(CreatePolicyOp)
-def render_create_policy(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return (
-        f"typing.cast(alembic_ops.RLSOp, op).create_policy("
-        f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, policy_type={op.policy_type!r}, expr={op.expr!r}"
-        f"{_render_schemaname(op.schemaname)})"
-    )
+def render_create_policy(
+    autogen_context: autogenerate_api.AutogenContext, op: CreatePolicyOp
+) -> str:
+    return _render_policy_op(autogen_context, "create_policy", op)
 
 
 @autogenerate.renderers.dispatch_for(DropPolicyOp)
-def render_drop_policy(autogen_context, op):
-    _add_rls_imports(autogen_context)
-    return (
-        f"typing.cast(alembic_ops.RLSOp, op).drop_policy("
-        f"table_name={op.table_name!r}, policy_name={op.policy_name!r}, "
-        f"cmd={op.cmd!r}, policy_type={op.policy_type!r}, expr={op.expr!r}"
-        f"{_render_schemaname(op.schemaname)})"
-    )
+def render_drop_policy(
+    autogen_context: autogenerate_api.AutogenContext, op: DropPolicyOp
+) -> str:
+    return _render_policy_op(autogen_context, "drop_policy", op)
