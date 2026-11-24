@@ -127,6 +127,125 @@ Policy.from_sqla(
 
 The final policy name always ends with a short hash of the policy definition (type, command, expressions and roles), so changing a policy changes its name (see the [alembic docs](./alembic.md)). Two identical policies with the same name on one table would get the same name, so registering a table whose policies share a name raises `ValueError`; give one of them a different `name` or remove the duplicate.
 
+#### Policy.from_relationship
+
+Most policies follow a relationship: a book belongs to whoever its author belongs to. `Policy.from_relationship` builds such a policy from a `relationship()` of the model, so the join condition does not have to be repeated in a `Policy.from_sqla` expression.
+
+```python
+class Author(Base):
+    __tablename__ = "authors"
+
+    id = Column(Integer, primary_key=True)
+
+    __rls_policies__ = [
+        Policy.from_sqla(
+            expr=lambda x: column("id") == x,
+            condition_args=[ConditionArg(comparator_name="account_id", type=Integer)],
+            cmd=Command.all,
+        ),
+    ]
+
+
+class Book(Base):
+    __tablename__ = "books"
+
+    id = Column(Integer, primary_key=True)
+    author_id = Column(Integer, ForeignKey("authors.id"))
+
+    author = relationship("Author")
+    tags = relationship("Tag", secondary=book_tags)
+
+    __rls_policies__ = [
+        # A book is accessible when its author is.
+        Policy.from_relationship("author"),
+    ]
+```
+
+The first argument is the name of the relationship attribute. There are two kinds of relationship policy, depending on whether `condition_arg` is passed:
+
+| | Many-to-one (`Book.author`) | Many-to-many (`Book.tags`) |
+|---|---|---|
+| `from_relationship("...")` | `EXISTS (SELECT 1 FROM authors WHERE authors.id = books.author_id)` | `EXISTS (SELECT 1 FROM book_tags JOIN tags ON tags.id = book_tags.tag_id WHERE books.id = book_tags.book_id)` |
+| `from_relationship("...", condition_arg=...)` | `books.author_id = <context value>` | `EXISTS (SELECT 1 FROM book_tags WHERE books.id = book_tags.book_id AND book_tags.tag_id = <context value>)` |
+
+**Without `condition_arg`**, a row is accessible when it is related to at least one row the session can see. Postgres applies the `SELECT` policies of the related table (and of the association table) inside the `EXISTS`, so the book above is accessible exactly when the session can see its author, and a many-to-many row is accessible when the session can see at least one of the rows it is linked to. Policies chain: a `Chapter` with `Policy.from_relationship("book")` follows the book, which follows the author. This also works for one-to-many relationships.
+
+- The related table must declare `__rls_policies__`. Otherwise every row with a related row would be accessible, so a `ValueError` is raised. (For many-to-many it is the association table that must be protected, see [below](#many-to-many-and-one-to-many-relationships).)
+- The related table's policies only apply if the querying role is subject to them: it needs `SELECT` on the related (and association) table and must not bypass their RLS (a table owner does when the table's [RLS mode](#rls-mode) is `enable`).
+- A row with no related row (e.g. a `NULL` foreign key) is only accessible with `bypass_rls()`.
+- Relationship policies must not read each other's tables in a cycle (e.g. `Book` following `author` while `Author` follows `books`), and a self-referential relationship cannot be followed. Postgres rejects both as infinite recursion, so they raise a `ValueError`. The cycle check does not take `roles` into account.
+
+**With `condition_arg`**, a row is accessible when it is related to the row whose primary key equals that context value, without consulting the related table's policies:
+
+```python
+account_id = ConditionArg(comparator_name="account_id", type=Integer)
+
+# Many-to-one: books.author_id = <account_id>
+Policy.from_relationship("author", condition_arg=account_id)
+
+# Many-to-many: the association table links the row to <account_id>
+Policy.from_relationship("members", condition_arg=account_id)
+```
+
+This is supported for many-to-one and many-to-many relationships that join on the related model's single-column primary key; anything else raises a `ValueError` and needs `Policy.from_sqla`.
+
+##### Many-to-many and one-to-many relationships
+
+A many-to-one relationship is stored on the row itself (its foreign key), so the policy also checks the rows that are written: a book can only be inserted for, or moved to, an author the session can access. The links of the other relationships are stored elsewhere, which has two consequences.
+
+**The association table must be protected.** Whoever can write to the association table of a many-to-many relationship decides who can access the rows it links: a session that could insert a link from somebody else's row to one of its own tags would gain access to that row. `from_relationship` therefore raises a `ValueError` unless the association table has policies of its own. Declare them with `register.table_policies`, the equivalent of `__rls_policies__` for a table without a mapped class:
+
+```python
+book_tags = Table(
+    "book_tags",
+    Base.metadata,
+    Column("book_id", ForeignKey("books.id"), primary_key=True),
+    Column("tag_id", ForeignKey("tags.id"), primary_key=True),
+)
+
+
+def bypass_only(cmd):
+    # Nobody passes the expression, so only bypass_rls() sessions do.
+    return Policy.from_sqla(
+        expr=lambda: false(), condition_args=[], cmd=cmd, name="bypass_only"
+    )
+
+
+register.table_policies(
+    book_tags,
+    [
+        # Sessions can read the links to the tags they can see ...
+        Policy.from_sqla(
+            expr=lambda: exists().where(Tag.id == column("tag_id")),
+            condition_args=[],
+            cmd=Command.select,
+        ),
+        # ... but only change links with bypass_rls().
+        bypass_only(Command.insert),
+        bypass_only(Command.delete),
+    ],
+)
+```
+
+`table_policies(table, policies, rls_mode=...)` must be called after `register.base_wrapper(Base)` and accepts `Policy` and `ExternalPolicy` objects. `Policy.from_sqla` compiles its expression right away, so a policy that refers to a model (like `Tag` above) has to be declared after it. An association table that is mapped to a class is protected by that class's `__rls_policies__` instead.
+
+Having policies on the association table is necessary, not sufficient: what they allow is up to you. Be careful with write policies that only look at one side of the link, such as "a session may insert links to tags it can see" or "a session may add itself as a member", since they let a session link itself to any row whose id it knows. Because RLS is forced by default and `bypass_rls()` works by being part of each policy's expression, a command with no policy at all is denied even with `bypass_rls()`, which is why the example declares bypass-only write policies rather than none.
+
+**A new row has no links yet.** With a many-to-many or one-to-many relationship policy, a newly inserted row cannot pass the policy's `INSERT` check, so it can only be inserted with `bypass_rls()`. To let ordinary sessions create rows, add an `INSERT` policy saying who may (policies of the same type are combined with `OR`):
+
+```python
+__rls_policies__ = [
+    Policy.from_relationship("tags"),
+    Policy.from_sqla(expr=lambda: true(), condition_args=[], cmd=Command.insert),
+]
+```
+
+The new row stays inaccessible to its creator until it is linked, and Postgres applies the `SELECT` policies to `INSERT ... RETURNING`, so such inserts cannot return the row (e.g. a server-generated primary key). Creating the row and its first links inside `bypass_rls()`, or adding a policy on a column of the row itself (such as a `created_by` column), avoids both.
+
+`from_relationship` also accepts `cmd` (default `Command.all`), `name` (default `<policy_type>_<relationship>_<comparator name>_<cmd>`), `policy_type`, `allow_bypass_rls` and `roles`, which behave as in [`Policy.from_sqla`](#policyfrom_sqla). It can be mixed with other policies in `__rls_policies__`.
+
+The join condition is only known once SQLAlchemy has configured the mappers, so `from_relationship` returns a `RelationshipPolicy` declaration rather than a `Policy`. Alembic autogenerate and `create_policies_no_commit` resolve it for you (which configures the mappers, so the related model can be defined later in the file or in another module), and that is when the errors above are raised. Call `rls.policy.resolved_policies(Base.metadata)` to resolve and inspect the policies yourself, for example in a test. The policy has to be declared on the model whose table holds the relationship's columns, which matters for joined-table inheritance.
+
 #### ExternalPolicy
 
 `ExternalPolicy` declares a policy that already exists on the table and is managed outside of this package (e.g. by hand-written migrations). Alembic autogenerate never creates or drops it, and `rls.create_policies.create_policies_no_commit` skips it. It can be mixed with native policies in `__rls_policies__`:

@@ -7,9 +7,13 @@ from collections import abc
 
 import pydantic
 import sqlalchemy
+from sqlalchemy import orm
 from sqlalchemy import sql
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import interfaces as orm_interfaces
 from sqlalchemy.sql import elements
+from sqlalchemy.sql import util as sql_util
+from sqlalchemy.sql import visitors
 
 _CONDITION_ARGS_PREFIX = "rls"
 
@@ -32,6 +36,12 @@ BYPASS_RLS_SETTING = "bypass_rls"
 # Role specifications that are keywords rather than role names, so they must
 # not be quoted in ``TO`` clauses.
 _ROLE_KEYWORDS = frozenset({"PUBLIC", "CURRENT_ROLE", "CURRENT_USER", "SESSION_USER"})
+
+# ``MetaData.info`` keys.  ``rls_policies`` maps table names to the policies
+# declared for them; ``RELATIONSHIP_MAPPERS_KEY`` maps the tables that still
+# have unresolved ``RelationshipPolicy`` entries to their mapper.
+_POLICIES_KEY = "rls_policies"
+RELATIONSHIP_MAPPERS_KEY = "rls_relationship_mappers"
 
 
 class Command(str, enum.Enum):
@@ -292,6 +302,62 @@ class Policy(pydantic.BaseModel):
             comparator_names=tuple(arg.comparator_name for arg in condition_args),
         )
 
+    @classmethod
+    def from_relationship(
+        cls,
+        relationship: str,
+        cmd: Command = Command.all,
+        condition_arg: ConditionArg | None = None,
+        name: str | None = None,
+        allow_bypass_rls: bool = True,
+        policy_type: PolicyType = PolicyType.permissive,
+        roles: abc.Sequence[str] | None = None,
+    ) -> "RelationshipPolicy":
+        """Declare a policy derived from one of the model's relationships.
+
+        ``relationship`` is the name of a ``sqlalchemy.orm.relationship``
+        attribute of the model the policy is declared on.
+
+        Without ``condition_arg``, a row is accessible when it is related to
+        at least one row the session can see: the policy checks that a
+        related row ``EXISTS``, and Postgres applies the related table's own
+        ``SELECT`` policies to that check.  A ``Book`` with an ``author``
+        relationship is then accessible exactly when its ``Author`` is.
+
+        With ``condition_arg``, a row is accessible when it is related to the
+        row whose primary key is that context value.  For a many-to-one
+        relationship this is a plain comparison of the foreign key column
+        (``author_id = <context value>``); for a many-to-many relationship it
+        looks the value up in the association table.
+
+        Only a many-to-one relationship is stored on the row itself.  For
+        the others, a new row has no links yet, so it never passes the
+        policy's ``INSERT`` check: such rows can only be inserted with
+        ``bypass_rls()``, or by sessions allowed by another ``INSERT``
+        policy on the table.
+
+        The links of a many-to-many relationship decide who can access a
+        row, so its association table must have policies of its own (see
+        ``rls.register.table_policies``).
+
+        The expression is built from the relationship's join condition once
+        the mappers are configured, so the returned ``RelationshipPolicy`` is
+        only usable inside ``__rls_policies__``.  The remaining arguments
+        behave as in ``from_sqla``; ``name`` defaults to
+        ``<policy_type>_<relationship>_<comparator name>_<cmd>``.
+        """
+        if isinstance(roles, str):
+            raise TypeError("roles must be a sequence of role names, not a string")
+        return RelationshipPolicy(
+            relationship=relationship,
+            cmd=cmd,
+            condition_arg=condition_arg,
+            base_name=name,
+            allow_bypass_rls=allow_bypass_rls,
+            policy_type=policy_type,
+            roles=tuple(roles) if roles is not None else None,
+        )
+
     def render_policy(
         self, table_name: str, schemaname: str | None = None
     ) -> sqlalchemy.TextClause:
@@ -335,16 +401,21 @@ class Policy(pydantic.BaseModel):
 
 
 def check_unique_policy_names(
-    table_name: str, policies: abc.Iterable["Policy | ExternalPolicy"]
+    table_name: str,
+    policies: abc.Iterable["Policy | ExternalPolicy | RelationshipPolicy"],
 ) -> None:
     """Raise ``ValueError`` if two policies on a table share a name.
 
     Policy names embed a hash of the definition, so two identical policies
     with the same base name get the same name, which Postgres rejects.
+    Relationship policies have no name until they are resolved, so
+    unresolved ones are skipped.
     """
     seen: set[str] = set()
     duplicates: set[str] = set()
     for p in policies:
+        if isinstance(p, RelationshipPolicy):
+            continue
         if p.name in seen:
             duplicates.add(p.name)
         seen.add(p.name)
@@ -371,3 +442,305 @@ class ExternalPolicy(pydantic.BaseModel):
     """
 
     name: str
+
+
+def _table_label(table: sql.FromClause) -> str:
+    return getattr(table, "fullname", None) or str(table)
+
+
+def _policy_table_column(column: sqlalchemy.Column) -> elements.ColumnElement:
+    """Reference a column of the table the policy is attached to.
+
+    A regular column would add its table to the ``FROM`` clause of the
+    policy's subquery instead of referring to the row being checked.
+    """
+    table = typing.cast(sqlalchemy.Table, column.table)
+    return sql.literal_column(
+        f"{quote_table(table.name, table.schema)}.{quote_identifier(column.name)}",
+        type_=column.type,
+    )
+
+
+class RelationshipPolicy(pydantic.BaseModel):
+    """A policy derived from a relationship, see ``Policy.from_relationship``.
+
+    The policy expression depends on the relationship's join condition, which
+    is only known once SQLAlchemy has configured the mappers, so this is a
+    declaration that is turned into a ``Policy`` by ``resolve`` (done for
+    you by alembic autogenerate and ``create_policies_no_commit``).
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    relationship: str
+    cmd: Command = Command.all
+    condition_arg: ConditionArg | None = None
+    base_name: str | None = None
+    allow_bypass_rls: bool = True
+    policy_type: PolicyType = PolicyType.permissive
+    roles: tuple[str, ...] | None = None
+
+    @pydantic.model_validator(mode="after")
+    def _check_roles(self) -> typing.Self:
+        if self.roles is not None and not self.roles:
+            raise ValueError("roles must not be empty; use None for all roles")
+        return self
+
+    @property
+    def comparator_names(self) -> tuple[str, ...]:
+        """The context fields the policy reads."""
+        if self.condition_arg is None:
+            return ()
+        return (self.condition_arg.comparator_name,)
+
+    def _error(self, mapper: orm.Mapper, message: str) -> ValueError:
+        return ValueError(
+            f"Cannot build an RLS policy from relationship "
+            f"{mapper.class_.__name__}.{self.relationship}: {message}"
+        )
+
+    def _clause(
+        self, mapper: orm.Mapper
+    ) -> tuple[typing.Callable[..., elements.ColumnElement], frozenset[sql.FromClause]]:
+        """Return the policy expression (a function of the context value, if
+        ``condition_arg`` is set) and the tables its subquery reads."""
+        prop = mapper.attrs.get(self.relationship)
+        if not isinstance(prop, orm.RelationshipProperty):
+            raise self._error(
+                mapper,
+                f"{mapper.class_.__name__} has no relationship named "
+                f"{self.relationship!r} (relationships: "
+                f"{sorted(mapper.relationships.keys())})",
+            )
+        local_table = mapper.local_table
+        secondary = prop.secondary
+        target_tables: set[sql.FromClause] = set(sql_util.find_tables(prop.target))
+        allowed = target_tables | {local_table}
+        if secondary is not None:
+            allowed.add(secondary)
+        for element in visitors.iterate(prop.primaryjoin):
+            if isinstance(element, sqlalchemy.Column) and element.table not in allowed:
+                raise self._error(
+                    mapper,
+                    f"its join condition uses column {element}, which is not "
+                    f"on the {_table_label(local_table)!r} table the policy "
+                    "is attached to. Declare the policy on the model whose "
+                    "table has the relationship's columns.",
+                )
+
+        def to_policy_table(element: typing.Any, **_: typing.Any) -> typing.Any:
+            if isinstance(element, sqlalchemy.Column) and element.table is local_table:
+                return _policy_table_column(element)
+            return None
+
+        primaryjoin = visitors.replacement_traverse(
+            prop.primaryjoin, {}, to_policy_table
+        )
+
+        def exists(
+            from_: sql.FromClause, *where: elements.ColumnElement
+        ) -> elements.ColumnElement:
+            return (
+                sqlalchemy.select(sql.literal_column("1"))
+                .select_from(from_)
+                .where(*where)
+                .exists()
+            )
+
+        def check_not_self_referential(tables: abc.Iterable[sql.FromClause]) -> None:
+            if local_table in tables:
+                raise self._error(
+                    mapper,
+                    "the relationship is self-referential, so the policy "
+                    f"would have to read {_table_label(local_table)!r} from "
+                    "its own policy, which Postgres rejects as infinite "
+                    "recursion. Use Policy.from_sqla instead.",
+                )
+
+        if self.condition_arg is None:
+            # Accessible when a related row is visible to the session.
+            from_: sql.FromClause = prop.target
+            tables = set(target_tables)
+            if secondary is not None:
+                from_ = secondary.join(prop.target, prop.secondaryjoin)
+                tables.add(secondary)
+            check_not_self_referential(tables)
+            return (lambda: exists(from_, primaryjoin)), frozenset(tables)
+
+        # Accessible when related to the row whose primary key is the
+        # context value.
+        primary_key = prop.mapper.primary_key
+        if len(primary_key) != 1:
+            raise self._error(
+                mapper,
+                "condition_arg is compared with the related row's primary "
+                f"key, but {prop.mapper.class_.__name__} has a composite "
+                "primary key. Use Policy.from_sqla instead.",
+            )
+        key_error = self._error(
+            mapper,
+            "condition_arg is compared with the related row's primary key, "
+            "but the relationship does not join on the primary key of "
+            f"{prop.mapper.class_.__name__} alone. Use Policy.from_sqla "
+            "instead.",
+        )
+        if prop.direction is orm_interfaces.MANYTOONE:
+            pairs = prop.local_remote_pairs
+            if (
+                len(pairs) != 1
+                or pairs[0][1] is not primary_key[0]
+                or pairs[0][0].table is not local_table
+            ):
+                raise key_error
+            foreign_key = _policy_table_column(
+                typing.cast(sqlalchemy.Column, pairs[0][0])
+            )
+            return (lambda value: foreign_key == value), frozenset()
+        if prop.direction is orm_interfaces.MANYTOMANY and secondary is not None:
+            secondary_pairs = prop.secondary_synchronize_pairs or ()
+            if len(secondary_pairs) != 1 or secondary_pairs[0][0] is not primary_key[0]:
+                raise key_error
+            check_not_self_referential({secondary})
+            association_key = secondary_pairs[0][1]
+            return (
+                lambda value: exists(secondary, primaryjoin, association_key == value)
+            ), frozenset({secondary})
+        raise self._error(
+            mapper,
+            "condition_arg is only supported for many-to-one and many-to-many "
+            f"relationships, not {prop.direction.name}. Omit condition_arg "
+            "to make rows accessible when a related row is, or use "
+            "Policy.from_sqla.",
+        )
+
+    def resolve(self, mapper: orm.Mapper) -> Policy:
+        """Build the ``Policy`` for the model mapped by ``mapper``.
+
+        The mappers must be configured (``sqlalchemy.orm.configure_mappers``).
+        Raises ``ValueError`` if the relationship cannot be turned into a
+        policy, or if the table that decides access (the association table
+        of a many-to-many relationship, otherwise the related table) has no
+        RLS policies of its own.
+        """
+        expr, tables = self._clause(mapper)
+        prop = mapper.relationships[self.relationship]
+        metadata = typing.cast(sqlalchemy.Table, mapper.local_table).metadata
+        declared = metadata.info.get(_POLICIES_KEY, {})
+        if prop.secondary is not None:
+            if not declared.get(_table_label(prop.secondary)):
+                raise self._error(
+                    mapper,
+                    f"the association table {_table_label(prop.secondary)!r} "
+                    "has no RLS policies, so anyone who can write to it could "
+                    "link rows to gain access to them. Declare its policies "
+                    "with rls.register.table_policies.",
+                )
+        elif self.condition_arg is None and not any(
+            declared.get(_table_label(table)) for table in tables
+        ):
+            raise self._error(
+                mapper,
+                f"{sorted(_table_label(table) for table in tables)} "
+                "have no RLS policies, so every row with a related row "
+                "would be accessible. Declare __rls_policies__ on the "
+                "related model, or pass condition_arg to compare the "
+                "related row's primary key with a context value.",
+            )
+        name = self.base_name
+        if name is None:
+            name = "_".join(
+                [
+                    self.policy_type.value,
+                    self.relationship,
+                    *self.comparator_names,
+                    self.cmd.value,
+                ]
+            )
+        return Policy.from_sqla(
+            expr=expr,
+            condition_args=[self.condition_arg] if self.condition_arg else [],
+            cmd=self.cmd,
+            name=name,
+            allow_bypass_rls=self.allow_bypass_rls,
+            policy_type=self.policy_type,
+            roles=self.roles,
+        )
+
+    def referenced_tables(self, mapper: orm.Mapper) -> frozenset[str]:
+        """Names of the tables read by the policy's subquery, if any."""
+        return frozenset(_table_label(table) for table in self._clause(mapper)[1])
+
+
+def _check_no_recursion(
+    relationship_policies: abc.Mapping[
+        str, abc.Sequence[tuple[RelationshipPolicy, orm.Mapper]]
+    ],
+) -> None:
+    """Raise ``ValueError`` if relationship policies read each other's tables
+    in a cycle, which Postgres rejects when the tables are queried.
+
+    Only ``SELECT`` and ``ALL`` policies apply to the rows a policy's
+    subquery reads, so only those can form a cycle.
+    """
+    reads: dict[str, set[str]] = {}
+    for table_name, entries in relationship_policies.items():
+        for relationship_policy, mapper in entries:
+            if relationship_policy.cmd in (Command.select, Command.all):
+                reads.setdefault(table_name, set()).update(
+                    relationship_policy.referenced_tables(mapper)
+                )
+
+    def visit(table_name: str, path: tuple[str, ...]) -> None:
+        if table_name in path:
+            cycle = [*path[path.index(table_name) :], table_name]
+            raise ValueError(
+                "RLS relationship policies read each other's tables in a "
+                f"cycle ({' -> '.join(cycle)}), which Postgres rejects as "
+                "infinite recursion. Derive the policies in one direction "
+                "only, e.g. from the child to its parent."
+            )
+        for other in sorted(reads.get(table_name, ())):
+            visit(other, (*path, table_name))
+
+    for table_name in sorted(reads):
+        visit(table_name, ())
+
+
+def resolved_policies(
+    metadata: sqlalchemy.MetaData,
+) -> dict[str, list["Policy | ExternalPolicy"]]:
+    """Return the policies registered on ``metadata``, keyed by table name.
+
+    Policies declared with ``Policy.from_relationship`` are resolved first,
+    which configures the mappers of their registry.  The result is stored, so they are only
+    resolved once.
+    """
+    policies = metadata.info[_POLICIES_KEY]
+    pending: dict[str, orm.Mapper] = metadata.info.get(RELATIONSHIP_MAPPERS_KEY, {})
+    if pending:
+        # Only configure the registries involved, so that unrelated models
+        # elsewhere in the process cannot make this fail.
+        for registry in {mapper.registry for mapper in pending.values()}:
+            registry.configure(cascade=True)
+        _check_no_recursion(
+            {
+                table_name: [
+                    (p, mapper)
+                    for p in policies[table_name]
+                    if isinstance(p, RelationshipPolicy)
+                ]
+                for table_name, mapper in pending.items()
+            }
+        )
+        resolved = {
+            table_name: [
+                p.resolve(mapper) if isinstance(p, RelationshipPolicy) else p
+                for p in policies[table_name]
+            ]
+            for table_name, mapper in pending.items()
+        }
+        for table_name, table_policies in resolved.items():
+            check_unique_policy_names(table_name, table_policies)
+        policies.update(resolved)
+        pending.clear()
+    return policies

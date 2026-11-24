@@ -338,7 +338,7 @@ def compare_table_level(
 
     # STEP 3. Get RLS policies defined in the metadata.  They are registered
     # under the table's schema-qualified name (``Table.fullname``).
-    rls_policies_meta = metadata_table.metadata.info["rls_policies"].get(
+    rls_policies_meta = policy.resolved_policies(metadata_table.metadata).get(
         _qualified_name(tablename, schemaname), []
     )
     policy.check_unique_policy_names(

@@ -33,7 +33,7 @@ def create_policies_no_commit(
             f"{Base.__name__} is not registered for RLS; call "
             "rls.register.base_wrapper(Base) before create_policies_no_commit."
         )
-    for table, rls_settings in Base.metadata.info["rls_policies"].items():
+    for table, rls_settings in policy_module.resolved_policies(Base.metadata).items():
         if not rls_settings:
             continue
         policy_module.check_unique_policy_names(table, rls_settings)

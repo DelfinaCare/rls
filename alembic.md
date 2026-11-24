@@ -34,6 +34,8 @@ Autogenerate compares against the policies that exist on a table even when RLS i
 
 Policies declared as `ExternalPolicy` are managed outside of this package: autogenerate never creates or drops them. Setting the `RLS_SUPPRESS_ALEMBIC_GENERATION` environment variable to `1` (or `true`, `yes`, `on`) disables all RLS autogenerate operations. Both are intended for migrating an existing RLS codebase, see the [migration guide](./migration.md).
 
+Policies declared with `Policy.from_relationship` are built from the relationship's join condition when autogenerate runs, which configures the SQLAlchemy mappers. Like any other policy, their name ends with a hash of the generated expression, so changing the relationship's join (e.g. renaming the foreign key column) drops and re-creates the policy.
+
 **Warning**: autogenerate drops any policy on a table in your metadata that is not declared in `__rls_policies__`, and disables RLS on tables that declare no policies.
 
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
