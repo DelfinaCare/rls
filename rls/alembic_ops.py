@@ -73,6 +73,126 @@ class DisableRlsOp(alembic_operations.MigrateOperation):
         return EnableRlsOp(self.tablename, schemaname=self.schemaname)
 
 
+class _RowVisibleFunctionOp(alembic_operations.MigrateOperation):
+    """Base class of the operations on the helper functions used by the
+    generated policies of association tables (see
+    ``policy.RowVisibleFunction``)."""
+
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+    ) -> None:
+        self.table_name = table_name
+        self.column_name = column_name
+        self.key_type = key_type
+        self.schemaname = schemaname
+
+    def _kwargs(self) -> dict[str, typing.Any]:
+        return {
+            "table_name": self.table_name,
+            "column_name": self.column_name,
+            "key_type": self.key_type,
+            "schemaname": self.schemaname,
+        }
+
+    def to_function(self) -> policy.RowVisibleFunction:
+        return policy.RowVisibleFunction(**self._kwargs())
+
+    @classmethod
+    def from_function(
+        cls, function: policy.RowVisibleFunction, **kw: typing.Any
+    ) -> typing.Self:
+        return cls(
+            table_name=function.table_name,
+            column_name=function.column_name,
+            key_type=function.key_type,
+            schemaname=function.schemaname,
+            **kw,
+        )
+
+
+@alembic_operations.Operations.register_operation("create_rls_row_visible_function")
+class CreateRowVisibleFunctionOp(_RowVisibleFunctionOp):
+    """Create (or replace) the helper function that checks whether the
+    session can see a row of ``table_name``.
+
+    ``replaces`` records whether the function already existed, so that the
+    reverse operation only drops a function this one created.
+    """
+
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+        replaces: bool = False,
+    ) -> None:
+        super().__init__(table_name, column_name, key_type, schemaname)
+        self.replaces = replaces
+
+    @classmethod
+    def create_rls_row_visible_function(
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        **kw: typing.Any,
+    ) -> None:
+        operations.invoke(
+            CreateRowVisibleFunctionOp(table_name, column_name, key_type, **kw)
+        )
+
+    def reverse(self) -> "CreateRowVisibleFunctionOp | DropRowVisibleFunctionOp":
+        # The previous version of a replaced function is not known, so the
+        # function is left in place.
+        if self.replaces:
+            return CreateRowVisibleFunctionOp(**self._kwargs(), replaces=True)
+        return DropRowVisibleFunctionOp(**self._kwargs())
+
+
+@alembic_operations.Operations.register_operation("drop_rls_row_visible_function")
+class DropRowVisibleFunctionOp(_RowVisibleFunctionOp):
+    """Drop the helper function that checks whether the session can see a
+    row of ``table_name``."""
+
+    @classmethod
+    def drop_rls_row_visible_function(
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        **kw: typing.Any,
+    ) -> None:
+        operations.invoke(
+            DropRowVisibleFunctionOp(table_name, column_name, key_type, **kw)
+        )
+
+    def reverse(self) -> CreateRowVisibleFunctionOp:
+        return CreateRowVisibleFunctionOp(**self._kwargs())
+
+
+@alembic_operations.Operations.implementation_for(CreateRowVisibleFunctionOp)
+def create_rls_row_visible_function(
+    operations: alembic_operations.Operations,
+    operation: CreateRowVisibleFunctionOp,
+) -> None:
+    operations.execute(_escape_colons(operation.to_function().create_sql))
+
+
+@alembic_operations.Operations.implementation_for(DropRowVisibleFunctionOp)
+def drop_rls_row_visible_function(
+    operations: alembic_operations.Operations,
+    operation: DropRowVisibleFunctionOp,
+) -> None:
+    operations.execute(_escape_colons(operation.to_function().drop_sql))
+
+
 def _qualified_name(tablename: str, schemaname: str | None) -> str:
     return f"{schemaname}.{tablename}" if schemaname is not None else tablename
 
@@ -128,6 +248,23 @@ class RLSOp(typing.Protocol):
     ) -> None: ...
 
     def disable_rls(self, tablename: str, **kw: typing.Any) -> None: ...
+
+    def create_rls_row_visible_function(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+        replaces: bool = False,
+    ) -> None: ...
+
+    def drop_rls_row_visible_function(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+    ) -> None: ...
 
     def create_policy(
         self,
@@ -187,6 +324,33 @@ def render_disable_rls(
         f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r}"
         f"{_render_schemaname(op.schemaname)})"
     )
+
+
+def _render_function_op(name: str, op: _RowVisibleFunctionOp, *extra: str) -> str:
+    args = [repr(op.table_name), repr(op.column_name), repr(op.key_type)]
+    if op.schemaname is not None:
+        args.append(f"schemaname={op.schemaname!r}")
+    args.extend(extra)
+    return f"typing.cast(alembic_ops.RLSOp, op).{name}({', '.join(args)})"
+
+
+@autogenerate.renderers.dispatch_for(CreateRowVisibleFunctionOp)
+def render_create_rls_row_visible_function(
+    autogen_context: autogenerate_api.AutogenContext,
+    op: CreateRowVisibleFunctionOp,
+) -> str:
+    _add_rls_imports(autogen_context)
+    extra = ("replaces=True",) if op.replaces else ()
+    return _render_function_op("create_rls_row_visible_function", op, *extra)
+
+
+@autogenerate.renderers.dispatch_for(DropRowVisibleFunctionOp)
+def render_drop_rls_row_visible_function(
+    autogen_context: autogenerate_api.AutogenContext,
+    op: DropRowVisibleFunctionOp,
+) -> str:
+    _add_rls_imports(autogen_context)
+    return _render_function_op("drop_rls_row_visible_function", op)
 
 
 def _schema_expr(schemaname: str | None) -> typing.Any:
@@ -311,13 +475,20 @@ def compare_table_level(
     conn_table: sa.Table | None,
     metadata_table: sa.Table | None,
 ) -> None:
-    if metadata_table is None:
-        # The table is being dropped, which also drops its policies.
-        return
     if alembic_generation_suppressed():
         return
     connection = autogen_context.connection
     assert connection is not None, "RLS autogenerate requires a database connection"
+    if metadata_table is None:
+        # The table is being dropped, which also drops its policies.  They
+        # are still dropped explicitly first, since they may read other
+        # tables this migration drops (see reorder_policy_operations).
+        if conn_table is not None:
+            modify_ops.ops.extend(
+                _drop_policy_op(tablename, schemaname, policy_db)
+                for policy_db in check_rls_policies(connection, schemaname, tablename)
+            )
+        return
 
     # STEP 1. check if the table exists
     table_exists = check_table_exists(connection, schemaname, tablename)
@@ -338,7 +509,7 @@ def compare_table_level(
 
     # STEP 3. Get RLS policies defined in the metadata.  They are registered
     # under the table's schema-qualified name (``Table.fullname``).
-    rls_policies_meta = metadata_table.metadata.info["rls_policies"].get(
+    rls_policies_meta = policy.resolved_policies(metadata_table.metadata).get(
         _qualified_name(tablename, schemaname), []
     )
     policy.check_unique_policy_names(
@@ -396,19 +567,226 @@ def compare_table_level(
     # (including outdated versions of changed policies) before creating new ones.
     for policy_db in rls_policies_db:
         if policy_db.name not in all_metadata_policy_names:
-            modify_ops.ops.append(
-                DropPolicyOp(
-                    table_name=tablename,
-                    policy_type=policy_db.policy_type.value,
-                    policy_name=policy_db.name,
-                    cmd=_cmd_value(policy_db.cmd),
-                    expr=policy_db.expr,
-                    schemaname=schemaname,
-                    check_expr=policy_db.check_expr,
-                    roles=policy_db.roles,
-                )
-            )
+            modify_ops.ops.append(_drop_policy_op(tablename, schemaname, policy_db))
     modify_ops.ops.extend(create_ops)
+
+
+def _drop_policy_op(
+    tablename: str, schemaname: str | None, policy_db: policy.Policy
+) -> "DropPolicyOp":
+    return DropPolicyOp(
+        table_name=tablename,
+        policy_type=policy_db.policy_type.value,
+        policy_name=policy_db.name,
+        cmd=_cmd_value(policy_db.cmd),
+        expr=policy_db.expr,
+        schemaname=schemaname,
+        check_expr=policy_db.check_expr,
+        roles=policy_db.roles,
+    )
+
+
+def _register_late_schema_comparator(
+    fn: typing.Callable[..., typing.Any],
+) -> typing.Callable[..., typing.Any]:
+    """Register ``fn`` to run after Alembic has compared all tables."""
+    try:
+        from alembic.util import DispatchPriority
+    except ImportError:  # alembic < 1.18
+        # Functions run in registration order, and Alembic registers its
+        # own table comparison when it is imported.
+        return autogenerate.comparators.dispatch_for("schema")(fn)
+    # Alembic >= 1.18 adds its own comparators after the ones registered
+    # here, so this one must run with the last priority.
+    return autogenerate.comparators.dispatch_for(
+        "schema", priority=DispatchPriority.LAST
+    )(fn)
+
+
+def _metadatas(
+    autogen_context: autogenerate_api.AutogenContext,
+) -> list[sa.MetaData]:
+    metadata = autogen_context.metadata
+    if metadata is None:
+        return []
+    if isinstance(metadata, sa.MetaData):
+        return [metadata]
+    return list(metadata)
+
+
+def _row_visible_function_ops(
+    autogen_context: autogenerate_api.AutogenContext,
+) -> tuple[list[CreateRowVisibleFunctionOp], list[DropRowVisibleFunctionOp]]:
+    """Return the operations that create or update the helper functions the
+    policies in the metadata call, and that drop the ones they no longer
+    call."""
+    metadatas = [m for m in _metadatas(autogen_context) if "rls_policies" in m.info]
+    wanted = {
+        function.signature: function
+        for metadata in metadatas
+        for function in policy.row_visible_functions(metadata)
+    }
+    connection = autogen_context.connection
+    assert connection is not None, "RLS autogenerate requires a database connection"
+    current_schema: str = connection.execute(
+        sa.text("SELECT quote_ident(current_schema())")
+    ).scalar_one()
+    creates = []
+    wanted_oids = set()
+    for signature, function in wanted.items():
+        row = connection.execute(
+            sa.text(
+                "SELECT oid, prosrc FROM pg_proc "
+                "WHERE oid = to_regprocedure(:signature)"
+            ),
+            {"signature": signature},
+        ).one_or_none()
+        if row is not None:
+            wanted_oids.add(row.oid)
+            if row.prosrc == function.body(function.quoted_schema or current_schema):
+                continue
+        creates.append(
+            CreateRowVisibleFunctionOp.from_function(function, replaces=row is not None)
+        )
+    # Generated functions in the schemas of the metadata's tables.
+    schemas = sorted(
+        {
+            table.schema
+            for metadata in metadatas
+            for table in metadata.tables.values()
+            if table.schema is not None
+        }
+    )
+    existing = connection.execute(
+        sa.text(
+            "SELECT p.oid, p.prosrc FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE (n.nspname = current_schema() OR n.nspname = ANY(:schemas)) "
+            "AND p.prosrc LIKE :marker"
+        ),
+        {
+            "schemas": schemas,
+            "marker": f"%{policy.ROW_VISIBLE_FUNCTION_MARKER}%",
+        },
+    ).all()
+    metadata_tables = {
+        key for metadata in _metadatas(autogen_context) for key in metadata.tables
+    }
+    drops = []
+    for row in existing:
+        if row.oid in wanted_oids:
+            continue
+        stale = policy.RowVisibleFunction.from_body(row.prosrc)
+        if stale is None or not _manages_function(
+            autogen_context, connection, row.oid, stale, metadata_tables
+        ):
+            continue
+        drops.append(DropRowVisibleFunctionOp.from_function(stale))
+    return creates, drops
+
+
+def _manages_function(
+    autogen_context: autogenerate_api.AutogenContext,
+    connection: sa.Connection,
+    oid: int,
+    function: policy.RowVisibleFunction,
+    metadata_tables: set[str],
+) -> bool:
+    """Whether this migration may drop an unused helper function.
+
+    Its table must pass the migration's name filters, and every policy that
+    still calls it must be on a table of the metadata (whose policies this
+    migration drops if they are no longer declared), so that a function
+    used by another base's policies is left alone.
+    """
+    if function.schemaname is not None and not autogen_context.run_name_filters(
+        function.schemaname, "schema", {}
+    ):
+        return False
+    if not autogen_context.run_name_filters(
+        function.table_name, "table", {"schema_name": function.schemaname}
+    ):
+        return False
+    dependents = connection.execute(
+        sa.text(
+            "SELECT n.nspname, c.relname, n.nspname = current_schema() AS current "
+            "FROM pg_depend d "
+            "JOIN pg_policy pol ON pol.oid = d.objid "
+            "JOIN pg_class c ON c.oid = pol.polrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE d.classid = 'pg_policy'::regclass "
+            "AND d.refclassid = 'pg_proc'::regclass AND d.refobjid = :oid"
+        ),
+        {"oid": oid},
+    ).all()
+    return all(
+        f"{row.nspname}.{row.relname}" in metadata_tables
+        or (row.current and row.relname in metadata_tables)
+        for row in dependents
+    )
+
+
+@_register_late_schema_comparator
+def reorder_policy_operations(
+    autogen_context: autogenerate_api.AutogenContext,
+    upgrade_ops: migrate_ops.UpgradeOps,
+    schemas: typing.Any,
+) -> None:
+    """Drop policies before, and create policies after, every other schema
+    change of the migration.
+
+    Alembic emits the operations of each table together, but a policy may
+    read other tables (e.g. one derived from a relationship reads the
+    related or association table) and their columns.  Postgres rejects
+    dropping a table or column that an existing policy reads, and creating a
+    policy that reads one that does not exist yet, and either may happen
+    elsewhere in the same migration.  If the migration changes the schema,
+    all policy drops are therefore moved to its start and all policy
+    creations to its end.  The other operations (e.g. creating indexes that
+    later foreign keys rely on) stay where they are.
+    """
+    if alembic_generation_suppressed():
+        return
+    top_level = upgrade_ops.ops
+    changes_schema = any(
+        not isinstance(op, migrate_ops.ModifyTableOps)
+        or not all(isinstance(sub_op, _RLS_OPS) for sub_op in op.ops)
+        for op in top_level
+    )
+    # Policies call the helper functions, so they are created before the
+    # policies (but after the tables and types they use) and dropped last.
+    creates_and_drops = _row_visible_function_ops(autogen_context)
+    function_creates: list[migrate_ops.MigrateOperation] = [*creates_and_drops[0]]
+    function_drops: list[migrate_ops.MigrateOperation] = [*creates_and_drops[1]]
+    if not changes_schema:
+        top_level[:0] = function_creates
+        top_level.extend(function_drops)
+        return
+    drops: list[migrate_ops.MigrateOperation] = []
+    creates: list[migrate_ops.MigrateOperation] = []
+    for op in top_level:
+        if not isinstance(op, migrate_ops.ModifyTableOps):
+            continue
+        for kind, moved in ((DropPolicyOp, drops), (CreatePolicyOp, creates)):
+            matching = [sub_op for sub_op in op.ops if isinstance(sub_op, kind)]
+            if matching:
+                op.ops = [sub_op for sub_op in op.ops if not isinstance(sub_op, kind)]
+                moved.append(
+                    migrate_ops.ModifyTableOps(
+                        op.table_name, matching, schema=op.schema
+                    )
+                )
+    top_level[:] = (
+        drops
+        + [
+            op
+            for op in top_level
+            if not (isinstance(op, migrate_ops.ModifyTableOps) and not op.ops)
+        ]
+        + function_creates
+        + creates
+        + function_drops
+    )
 
 
 class _PolicyOp(alembic_operations.MigrateOperation):
@@ -566,3 +944,7 @@ def render_drop_policy(
     autogen_context: autogenerate_api.AutogenContext, op: DropPolicyOp
 ) -> str:
     return _render_policy_op(autogen_context, "drop_policy", op)
+
+
+# The operations of this module, which do not change the schema of tables.
+_RLS_OPS = (EnableRlsOp, DisableRlsOp, CreatePolicyOp, DropPolicyOp)

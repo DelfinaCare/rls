@@ -13,7 +13,9 @@ _CONTEXT_MODEL_KEY = "rls_context_model"
 
 def _check_context_fields(
     table_name: str,
-    policies: abc.Iterable[policy.Policy | policy.ExternalPolicy],
+    policies: abc.Iterable[
+        policy.Policy | policy.ExternalPolicy | policy.RelationshipPolicy
+    ],
     context_model: type[pydantic.BaseModel],
 ) -> None:
     """Raise ``ValueError`` if a policy reads a field the context lacks.
@@ -28,8 +30,13 @@ def _check_context_fields(
             continue
         missing = [name for name in p.comparator_names if name not in fields]
         if missing:
+            label = (
+                f"for relationship {p.relationship!r}"
+                if isinstance(p, policy.RelationshipPolicy)
+                else repr(p.name)
+            )
             raise ValueError(
-                f"RLS policy {p.name!r} on table {table_name!r} reads "
+                f"RLS policy {label} on table {table_name!r} reads "
                 f"{missing}, which are not fields of "
                 f"{context_model.__name__} (fields: {sorted(fields)})"
             )
@@ -52,6 +59,45 @@ def validate_context(
         )
     for table_name, policies in Base.metadata.info["rls_policies"].items():
         _check_context_fields(table_name, policies, context_model)
+
+
+def table_policies(
+    table: sqlalchemy.Table,
+    policies: abc.Sequence[policy.Policy | policy.ExternalPolicy],
+    rls_mode: policy.RlsMode | str = policy.DEFAULT_RLS_MODE,
+) -> None:
+    """Declare the RLS policies of a table that has no mapped class, such as
+    the association (``secondary``) table of a many-to-many relationship.
+
+    This is the equivalent of ``__rls_policies__`` and ``__rls_mode__`` on a
+    model.  The table's metadata must have been registered with
+    ``base_wrapper``.  Raises ``ValueError`` if the table already has
+    policies, if two policies share a name, or if a context model was
+    registered and a policy reads a field it lacks.
+    """
+    info = table.metadata.info
+    if "rls_policies" not in info:
+        raise ValueError(
+            f"The metadata of table {table.fullname!r} is not registered for "
+            "RLS; call rls.register.base_wrapper(Base) first."
+        )
+    policies = list(policies)
+    for p in policies:
+        if not isinstance(p, policy.Policy | policy.ExternalPolicy):
+            raise TypeError(
+                f"Policies of table {table.fullname!r} must be Policy or "
+                f"ExternalPolicy objects, not {type(p).__name__}. "
+                "Policy.from_relationship needs a mapped class."
+            )
+    if info["rls_policies"].get(table.fullname):
+        raise ValueError(f"Table {table.fullname!r} already has RLS policies.")
+    policy.check_unique_policy_names(table.fullname, policies)
+    context_model = info.get(_CONTEXT_MODEL_KEY)
+    if context_model is not None:
+        _check_context_fields(table.fullname, policies, context_model)
+    mode = policy.RlsMode(rls_mode)
+    info["rls_policies"][table.fullname] = policies
+    info.setdefault("rls_modes", {})[table.fullname] = mode
 
 
 def base_wrapper(
@@ -82,6 +128,10 @@ def base_wrapper(
     # Call the hook for already mapped classes.
     for mapper in Base.registry.mappers:
         base_wrapper_hook(mapper, mapper.class_)
+    if context_model is not None:
+        # Also checks policies declared with table_policies before the
+        # context model was given.
+        validate_context(Base, context_model)
     return Base
 
 
@@ -123,6 +173,13 @@ def base_wrapper_hook(mapper: orm.Mapper, class_: orm.DeclarativeMeta) -> None:
     if context_model is not None:
         _check_context_fields(table_name, rls_policies, context_model)
     class_.metadata.info["rls_policies"][table_name] = rls_policies
+    # Policies derived from relationships can only be built once the mappers
+    # are configured; policy.resolved_policies does that when they are used.
+    pending = class_.metadata.info.setdefault(policy.RELATIONSHIP_MAPPERS_KEY, {})
+    if any(isinstance(p, policy.RelationshipPolicy) for p in rls_policies):
+        pending[table_name] = mapper
+    else:
+        pending.pop(table_name, None)
     class_.metadata.info.setdefault("rls_modes", {})[table_name] = policy.RlsMode(
         getattr(class_, "__rls_mode__", policy.DEFAULT_RLS_MODE)
     )
