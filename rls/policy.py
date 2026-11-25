@@ -1,6 +1,8 @@
+import dataclasses
 import enum
 import hashlib
 import inspect
+import json
 import re
 import typing
 from collections import abc
@@ -44,39 +46,6 @@ _ROLE_KEYWORDS = frozenset({"PUBLIC", "CURRENT_ROLE", "CURRENT_USER", "SESSION_U
 _POLICIES_KEY = "rls_policies"
 RELATIONSHIP_MAPPERS_KEY = "rls_relationship_mappers"
 
-# Helper used by the policies generated for association tables (see
-# ``Policy.from_relationship(..., link_policies=True)``): whether the session
-# can see the row of ``tbl`` whose ``key_column`` equals ``key``.  It is a
-# plain (SECURITY INVOKER) function, so the lookup applies the table's own
-# RLS policies.  Postgres rejects a policy that reads a table whose policies
-# read the policy's table back (as an association table and the model whose
-# relationship policy reads it do), even when nothing would recurse at run
-# time; a function body is planned separately, so calling one avoids that.
-ROW_VISIBLE_FUNCTION = "rls_row_visible"
-ROW_VISIBLE_FUNCTION_SIGNATURE = f"{ROW_VISIBLE_FUNCTION}(regclass, name, anyelement)"
-ROW_VISIBLE_FUNCTION_BODY = (
-    "\nDECLARE\n    found boolean;\nBEGIN\n"
-    "    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s WHERE %I = $1)',"
-    " tbl, key_column)\n        INTO found USING key;\n"
-    "    RETURN found;\nEND\n"
-)
-ROW_VISIBLE_FUNCTION_SQL = (
-    f"CREATE OR REPLACE FUNCTION {ROW_VISIBLE_FUNCTION}"
-    "(tbl regclass, key_column name, key anyelement) RETURNS boolean "
-    f"LANGUAGE plpgsql STABLE AS $rls${ROW_VISIBLE_FUNCTION_BODY}$rls$"
-)
-
-
-def uses_row_visible_function(p: "Policy | ExternalPolicy") -> bool:
-    """Whether the policy calls the ``rls_row_visible`` helper function."""
-    if not isinstance(p, Policy):
-        return False
-    return any(
-        f"{ROW_VISIBLE_FUNCTION}(" in expr
-        for expr in (p.expr, p.check_expr)
-        if expr is not None
-    )
-
 
 class Command(str, enum.Enum):
     # policies: https://www.postgresql.org/docs/current/sql-createpolicy.html
@@ -117,6 +86,114 @@ def quote_table(table_name: str, schemaname: str | None = None) -> str:
     if schemaname is None:
         return quoted
     return f"{_IDENTIFIER_PREPARER.quote_schema(schemaname)}.{quoted}"
+
+
+# Marks the helper functions generated for association tables, and records
+# what they check, so that autogenerate can find, compare and drop them.
+ROW_VISIBLE_FUNCTION_MARKER = "-- rls_row_visible "
+_ROW_VISIBLE_FUNCTION_PREFIX = "rls_visible_"
+
+
+@dataclasses.dataclass(frozen=True)
+class RowVisibleFunction:
+    """A helper function used by the policies generated for association
+    tables (``Policy.from_relationship(..., link_policies=True)``): whether
+    the session can see the row of ``table_name`` whose ``column_name``
+    equals the argument.
+
+    It is a plain (``SECURITY INVOKER``) function, so the lookup applies the
+    table's own RLS policies.  Postgres rejects a policy that reads a table
+    whose policies read the policy's table back (as an association table and
+    the model whose relationship policy reads it do), even when nothing would
+    recurse at run time; a function body is planned separately, so calling
+    one avoids that.  Each table gets its own function with a static query,
+    so PL/pgSQL caches its plan.  The function lives in the table's schema.
+    """
+
+    table_name: str
+    column_name: str
+    key_type: str
+    schemaname: str | None = None
+
+    @property
+    def name(self) -> str:
+        name = f"{_ROW_VISIBLE_FUNCTION_PREFIX}{self.table_name}_{self.column_name}"
+        # SQLAlchemy does not quote function names with uppercase letters, so
+        # the name is lowercase, with a hash to keep it unique if needed.
+        if name == name.lower() and len(name.encode()) <= _MAX_IDENTIFIER_BYTES:
+            return name
+        digest = hashlib.sha256(
+            f"{self.table_name}.{self.column_name}".encode()
+        ).hexdigest()[:_POLICY_HASH_LENGTH]
+        keep = _MAX_IDENTIFIER_BYTES - _POLICY_HASH_LENGTH - 1
+        prefix = name.lower().encode()[:keep].decode(errors="ignore")
+        return f"{prefix}_{digest}"
+
+    @property
+    def qualified_name(self) -> str:
+        quoted = quote_identifier(self.name)
+        if self.schemaname is None:
+            return quoted
+        return f"{_IDENTIFIER_PREPARER.quote_schema(self.schemaname)}.{quoted}"
+
+    @property
+    def signature(self) -> str:
+        return f"{self.qualified_name}({self.key_type})"
+
+    @property
+    def body(self) -> str:
+        marker = json.dumps(
+            {
+                "schema": self.schemaname,
+                "table": self.table_name,
+                "column": self.column_name,
+                "type": self.key_type,
+            },
+            sort_keys=True,
+        )
+        table = quote_table(self.table_name, self.schemaname)
+        return (
+            f"\n{ROW_VISIBLE_FUNCTION_MARKER}{marker}\nBEGIN\n"
+            f"    RETURN EXISTS (SELECT 1 FROM {table} "
+            f"WHERE {table}.{quote_identifier(self.column_name)} = $1);\nEND\n"
+        )
+
+    @property
+    def create_sql(self) -> str:
+        return (
+            f"CREATE OR REPLACE FUNCTION {self.signature} RETURNS boolean "
+            f"LANGUAGE plpgsql STABLE AS $rls${self.body}$rls$"
+        )
+
+    @property
+    def drop_sql(self) -> str:
+        return f"DROP FUNCTION IF EXISTS {self.signature}"
+
+    @classmethod
+    def from_body(cls, body: str) -> "RowVisibleFunction | None":
+        """Read the function described by the marker in a function body."""
+        for line in body.splitlines():
+            if line.startswith(ROW_VISIBLE_FUNCTION_MARKER):
+                try:
+                    marker = json.loads(line[len(ROW_VISIBLE_FUNCTION_MARKER) :])
+                    return cls(
+                        table_name=marker["table"],
+                        column_name=marker["column"],
+                        key_type=marker["type"],
+                        schemaname=marker["schema"],
+                    )
+                except (ValueError, KeyError, TypeError):
+                    return None
+        return None
+
+
+_ROW_VISIBLE_FUNCTIONS_KEY = "rls_row_visible_functions"
+
+
+def row_visible_functions(metadata: sqlalchemy.MetaData) -> list[RowVisibleFunction]:
+    """The helper functions the policies registered on ``metadata`` call."""
+    resolved_policies(metadata)
+    return list(metadata.info.get(_ROW_VISIBLE_FUNCTIONS_KEY, {}).values())
 
 
 class ConditionArg(pydantic.BaseModel):
@@ -784,12 +861,13 @@ class RelationshipPolicy(pydantic.BaseModel):
 
     def link_table_policies(
         self, mapper: orm.Mapper
-    ) -> tuple[str, list[Policy], frozenset[str]]:
+    ) -> tuple[str, list[Policy], frozenset[str], RowVisibleFunction]:
         """Build the policies of the association table of a many-to-many
         relationship (``link_policies=True``).
 
-        Returns the association table's name, its policies, and the names
-        of the tables its ``SELECT`` policy reads.
+        Returns the association table's name, its policies, the names of the
+        tables its ``SELECT`` policy reads, and the helper function its
+        other policies call.
         """
         # Validates the relationship.
         self._clause(mapper)
@@ -843,16 +921,18 @@ class RelationshipPolicy(pydantic.BaseModel):
                 .exists()
             )
 
-        regclass = quote_table(source_table.name, source_table.schema).replace(
-            "'", "''"
+        function = RowVisibleFunction(
+            table_name=source_table.name,
+            column_name=source_key.name,
+            key_type=source_key.type.compile(dialect=_POSTGRES_DIALECT),
+            schemaname=source_table.schema,
         )
-        key_column = source_key.name.replace("'", "''")
 
         def both_visible() -> elements.ColumnElement:
-            source_visible = getattr(sqlalchemy.func, ROW_VISIBLE_FUNCTION)(
-                sql.literal_column(f"'{regclass}'::regclass"),
-                sql.literal_column(f"'{key_column}'"),
+            source_visible: elements.ColumnElement = sql.functions.Function(
+                function.name,
                 _policy_table_column(typing.cast(sqlalchemy.Column, link_source)),
+                packagenames=(function.schemaname,) if function.schemaname else (),
                 type_=sqlalchemy.Boolean,
             )
             return sql.and_(source_visible, target_visible())
@@ -878,6 +958,7 @@ class RelationshipPolicy(pydantic.BaseModel):
             _table_label(secondary),
             link_policies,
             frozenset(_table_label(table) for table in target_tables),
+            function,
         )
 
     def referenced_tables(self, mapper: orm.Mapper) -> frozenset[str]:
@@ -951,12 +1032,18 @@ def resolved_policies(
         # relationship policies find them.
         link_policies: dict[str, list[Policy]] = {}
         link_reads: dict[str, set[str]] = {}
+        functions: dict[str, RowVisibleFunction] = metadata.info.setdefault(
+            _ROW_VISIBLE_FUNCTIONS_KEY, {}
+        )
         for table_name, mapper in pending.items():
             for p in policies[table_name]:
                 if isinstance(p, RelationshipPolicy) and p.link_policies:
-                    link_table, generated, reads = p.link_table_policies(mapper)
+                    link_table, generated, reads, function = p.link_table_policies(
+                        mapper
+                    )
                     link_policies.setdefault(link_table, []).extend(generated)
                     link_reads.setdefault(link_table, set()).update(reads)
+                    functions.setdefault(function.qualified_name, function)
         modes = metadata.info.setdefault("rls_modes", {})
         for link_table, generated in link_policies.items():
             combined = [*policies.get(link_table, []), *generated]

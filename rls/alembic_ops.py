@@ -73,43 +73,108 @@ class DisableRlsOp(alembic_operations.MigrateOperation):
         return EnableRlsOp(self.tablename, schemaname=self.schemaname)
 
 
+class _RowVisibleFunctionOp(alembic_operations.MigrateOperation):
+    """Base class of the operations on the helper functions used by the
+    generated policies of association tables (see
+    ``policy.RowVisibleFunction``)."""
+
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+    ) -> None:
+        self.table_name = table_name
+        self.column_name = column_name
+        self.key_type = key_type
+        self.schemaname = schemaname
+
+    def _kwargs(self) -> dict[str, typing.Any]:
+        return {
+            "table_name": self.table_name,
+            "column_name": self.column_name,
+            "key_type": self.key_type,
+            "schemaname": self.schemaname,
+        }
+
+    def to_function(self) -> policy.RowVisibleFunction:
+        return policy.RowVisibleFunction(**self._kwargs())
+
+    @classmethod
+    def from_function(
+        cls, function: policy.RowVisibleFunction, **kw: typing.Any
+    ) -> typing.Self:
+        return cls(
+            table_name=function.table_name,
+            column_name=function.column_name,
+            key_type=function.key_type,
+            schemaname=function.schemaname,
+            **kw,
+        )
+
+
 @alembic_operations.Operations.register_operation("create_rls_row_visible_function")
-class CreateRowVisibleFunctionOp(alembic_operations.MigrateOperation):
-    """Create (or replace) the ``rls_row_visible`` helper function used by
-    the generated policies of association tables.
+class CreateRowVisibleFunctionOp(_RowVisibleFunctionOp):
+    """Create (or replace) the helper function that checks whether the
+    session can see a row of ``table_name``.
 
     ``replaces`` records whether the function already existed, so that the
     reverse operation only drops a function this one created.
     """
 
-    def __init__(self, replaces: bool = False) -> None:
+    def __init__(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+        replaces: bool = False,
+    ) -> None:
+        super().__init__(table_name, column_name, key_type, schemaname)
         self.replaces = replaces
 
     @classmethod
     def create_rls_row_visible_function(
-        cls, operations: alembic_operations.Operations, **kw: typing.Any
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        **kw: typing.Any,
     ) -> None:
-        operations.invoke(CreateRowVisibleFunctionOp(**kw))
+        operations.invoke(
+            CreateRowVisibleFunctionOp(table_name, column_name, key_type, **kw)
+        )
 
     def reverse(self) -> "CreateRowVisibleFunctionOp | DropRowVisibleFunctionOp":
-        # A replaced function is left in place: other policies may use it.
+        # The previous version of a replaced function is not known, so the
+        # function is left in place.
         if self.replaces:
-            return CreateRowVisibleFunctionOp(replaces=True)
-        return DropRowVisibleFunctionOp()
+            return CreateRowVisibleFunctionOp(**self._kwargs(), replaces=True)
+        return DropRowVisibleFunctionOp(**self._kwargs())
 
 
 @alembic_operations.Operations.register_operation("drop_rls_row_visible_function")
-class DropRowVisibleFunctionOp(alembic_operations.MigrateOperation):
-    """Drop the ``rls_row_visible`` helper function."""
+class DropRowVisibleFunctionOp(_RowVisibleFunctionOp):
+    """Drop the helper function that checks whether the session can see a
+    row of ``table_name``."""
 
     @classmethod
     def drop_rls_row_visible_function(
-        cls, operations: alembic_operations.Operations
+        cls,
+        operations: alembic_operations.Operations,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        **kw: typing.Any,
     ) -> None:
-        operations.invoke(DropRowVisibleFunctionOp())
+        operations.invoke(
+            DropRowVisibleFunctionOp(table_name, column_name, key_type, **kw)
+        )
 
     def reverse(self) -> CreateRowVisibleFunctionOp:
-        return CreateRowVisibleFunctionOp()
+        return CreateRowVisibleFunctionOp(**self._kwargs())
 
 
 @alembic_operations.Operations.implementation_for(CreateRowVisibleFunctionOp)
@@ -117,7 +182,7 @@ def create_rls_row_visible_function(
     operations: alembic_operations.Operations,
     operation: CreateRowVisibleFunctionOp,
 ) -> None:
-    operations.execute(policy.ROW_VISIBLE_FUNCTION_SQL)
+    operations.execute(operation.to_function().create_sql)
 
 
 @alembic_operations.Operations.implementation_for(DropRowVisibleFunctionOp)
@@ -125,9 +190,7 @@ def drop_rls_row_visible_function(
     operations: alembic_operations.Operations,
     operation: DropRowVisibleFunctionOp,
 ) -> None:
-    operations.execute(
-        f"DROP FUNCTION IF EXISTS {policy.ROW_VISIBLE_FUNCTION_SIGNATURE}"
-    )
+    operations.execute(operation.to_function().drop_sql)
 
 
 def _qualified_name(tablename: str, schemaname: str | None) -> str:
@@ -186,9 +249,22 @@ class RLSOp(typing.Protocol):
 
     def disable_rls(self, tablename: str, **kw: typing.Any) -> None: ...
 
-    def create_rls_row_visible_function(self, **kw: typing.Any) -> None: ...
+    def create_rls_row_visible_function(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+        replaces: bool = False,
+    ) -> None: ...
 
-    def drop_rls_row_visible_function(self) -> None: ...
+    def drop_rls_row_visible_function(
+        self,
+        table_name: str,
+        column_name: str,
+        key_type: str,
+        schemaname: str | None = None,
+    ) -> None: ...
 
     def create_policy(
         self,
@@ -250,13 +326,22 @@ def render_disable_rls(
     )
 
 
+def _render_function_op(name: str, op: _RowVisibleFunctionOp, *extra: str) -> str:
+    args = [repr(op.table_name), repr(op.column_name), repr(op.key_type)]
+    if op.schemaname is not None:
+        args.append(f"schemaname={op.schemaname!r}")
+    args.extend(extra)
+    return f"typing.cast(alembic_ops.RLSOp, op).{name}({', '.join(args)})"
+
+
 @autogenerate.renderers.dispatch_for(CreateRowVisibleFunctionOp)
 def render_create_rls_row_visible_function(
     autogen_context: autogenerate_api.AutogenContext,
     op: CreateRowVisibleFunctionOp,
 ) -> str:
     _add_rls_imports(autogen_context)
-    return "typing.cast(alembic_ops.RLSOp, op).create_rls_row_visible_function()"
+    extra = ("replaces=True",) if op.replaces else ()
+    return _render_function_op("create_rls_row_visible_function", op, *extra)
 
 
 @autogenerate.renderers.dispatch_for(DropRowVisibleFunctionOp)
@@ -265,7 +350,7 @@ def render_drop_rls_row_visible_function(
     op: DropRowVisibleFunctionOp,
 ) -> str:
     _add_rls_imports(autogen_context)
-    return "typing.cast(alembic_ops.RLSOp, op).drop_rls_row_visible_function()"
+    return _render_function_op("drop_rls_row_visible_function", op)
 
 
 def _schema_expr(schemaname: str | None) -> typing.Any:
@@ -518,29 +603,66 @@ def _metadatas(
     return list(metadata)
 
 
-def _row_visible_function_op(
+def _row_visible_function_ops(
     autogen_context: autogenerate_api.AutogenContext,
-) -> CreateRowVisibleFunctionOp | None:
-    """Return the operation that creates or updates the ``rls_row_visible``
-    helper function, if a policy in the metadata calls it and the database
-    lacks the current version."""
-    if not any(
-        policy.uses_row_visible_function(p)
-        for metadata in _metadatas(autogen_context)
-        if "rls_policies" in metadata.info
-        for table_policies in policy.resolved_policies(metadata).values()
-        for p in table_policies
-    ):
-        return None
+) -> tuple[list[CreateRowVisibleFunctionOp], list[DropRowVisibleFunctionOp]]:
+    """Return the operations that create or update the helper functions the
+    policies in the metadata call, and that drop the ones they no longer
+    call."""
+    metadatas = [m for m in _metadatas(autogen_context) if "rls_policies" in m.info]
+    wanted = {
+        function.signature: function
+        for metadata in metadatas
+        for function in policy.row_visible_functions(metadata)
+    }
     connection = autogen_context.connection
     assert connection is not None, "RLS autogenerate requires a database connection"
-    body = connection.execute(
-        sa.text("SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure(:signature)"),
-        {"signature": policy.ROW_VISIBLE_FUNCTION_SIGNATURE},
-    ).scalar_one_or_none()
-    if body == policy.ROW_VISIBLE_FUNCTION_BODY:
-        return None
-    return CreateRowVisibleFunctionOp(replaces=body is not None)
+    creates = []
+    wanted_oids = set()
+    for signature, function in wanted.items():
+        row = connection.execute(
+            sa.text(
+                "SELECT oid, prosrc FROM pg_proc "
+                "WHERE oid = to_regprocedure(:signature)"
+            ),
+            {"signature": signature},
+        ).one_or_none()
+        if row is not None:
+            wanted_oids.add(row.oid)
+            if row.prosrc == function.body:
+                continue
+        creates.append(
+            CreateRowVisibleFunctionOp.from_function(function, replaces=row is not None)
+        )
+    # Generated functions in the schemas of the metadata's tables.
+    schemas = sorted(
+        {
+            table.schema
+            for metadata in metadatas
+            for table in metadata.tables.values()
+            if table.schema is not None
+        }
+    )
+    existing = connection.execute(
+        sa.text(
+            "SELECT p.oid, p.prosrc FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE (n.nspname = current_schema() OR n.nspname = ANY(:schemas)) "
+            "AND p.prosrc LIKE :marker"
+        ),
+        {
+            "schemas": schemas,
+            "marker": f"%{policy.ROW_VISIBLE_FUNCTION_MARKER}%",
+        },
+    ).all()
+    drops = []
+    for row in existing:
+        if row.oid in wanted_oids:
+            continue
+        stale = policy.RowVisibleFunction.from_body(row.prosrc)
+        if stale is not None:
+            drops.append(DropRowVisibleFunctionOp.from_function(stale))
+    return creates, drops
 
 
 @_register_late_schema_comparator
@@ -570,10 +692,11 @@ def reorder_policy_operations(
         or not all(isinstance(sub_op, _RLS_OPS) for sub_op in op.ops)
         for op in top_level
     )
-    # Policies may call the helper function, so it is created first.
-    function_op = _row_visible_function_op(autogen_context)
-    if function_op is not None:
-        top_level.insert(0, function_op)
+    # Policies may call the helper functions, so they are created first and
+    # dropped last.
+    function_creates, function_drops = _row_visible_function_ops(autogen_context)
+    top_level[:0] = function_creates
+    top_level.extend(function_drops)
     if not changes_schema:
         return
     drops: list[migrate_ops.MigrateOperation] = []

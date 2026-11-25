@@ -889,9 +889,7 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
 
 
 _TAG_VISIBLE = "(EXISTS (SELECT 1 FROM tags WHERE tags.id = book_tags.tag_id))"
-_BOTH_VISIBLE = (
-    "rls_row_visible('books'::regclass, 'id', book_tags.book_id) AND " + _TAG_VISIBLE
-)
+_BOTH_VISIBLE = "rls_visible_books_id(book_tags.book_id) AND " + _TAG_VISIBLE
 
 
 class TestLinkPolicies(unittest.TestCase):
@@ -918,7 +916,10 @@ class TestLinkPolicies(unittest.TestCase):
                 for p in resolved
             )
         )
-        self.assertTrue(all(policy.uses_row_visible_function(p) for p in resolved[1:]))
+        self.assertEqual(
+            policy.row_visible_functions(Base.metadata),
+            [policy.RowVisibleFunction("books", "id", "INTEGER")],
+        )
         self.assertEqual(
             Base.metadata.info["rls_modes"]["book_tags"],
             policy.RlsMode.enable_and_force,
@@ -953,10 +954,36 @@ class TestLinkPolicies(unittest.TestCase):
         insert = typing.cast(
             policy.Policy, policy.resolved_policies(Base.metadata)["lib.book_tags"][1]
         )
-        self.assertIn(
-            "rls_row_visible('lib.books'::regclass, 'id', lib.book_tags.book_id)",
-            insert.expr,
+        self.assertIn("lib.rls_visible_books_id(lib.book_tags.book_id)", insert.expr)
+        (function,) = policy.row_visible_functions(Base.metadata)
+        self.assertEqual(function.signature, "lib.rls_visible_books_id(INTEGER)")
+        self.assertIn("FROM lib.books WHERE lib.books.id = $1", function.body)
+
+    def test_function_names(self) -> None:
+        self.assertEqual(
+            policy.RowVisibleFunction("books", "id", "INTEGER").name,
+            "rls_visible_books_id",
         )
+        # Lowercase (SQLAlchemy does not quote function names) and at most
+        # 63 bytes, with a hash to keep them distinct.
+        for table, column in (("Books", "id"), ("b" * 70, "id"), ("b" * 70, "id2")):
+            with self.subTest(table=table, column=column):
+                name = policy.RowVisibleFunction(table, column, "INTEGER").name
+                self.assertEqual(name, name.lower())
+                self.assertLessEqual(len(name), 63)
+        self.assertNotEqual(
+            policy.RowVisibleFunction("Books", "id", "INTEGER").name,
+            policy.RowVisibleFunction("books", "id", "INTEGER").name,
+        )
+        self.assertNotEqual(
+            policy.RowVisibleFunction("b" * 70, "id", "INTEGER").name,
+            policy.RowVisibleFunction("b" * 70, "id2", "INTEGER").name,
+        )
+
+    def test_function_marker_round_trips(self) -> None:
+        function = policy.RowVisibleFunction("books", "id", "UUID", schemaname="lib")
+        self.assertEqual(policy.RowVisibleFunction.from_body(function.body), function)
+        self.assertIsNone(policy.RowVisibleFunction.from_body("BEGIN RETURN true; END"))
 
     def test_added_to_declared_table_policies(self) -> None:
         Base = _library([policy.Policy.from_relationship("tags", link_policies=True)])
@@ -1617,11 +1644,13 @@ class RelationshipPolicyEndToEndTests(unittest.TestCase):
             alembic_ops_module.UpgradeOps(ops=[op, op.reverse()])
         )
         self.assertIn(
-            "typing.cast(alembic_ops.RLSOp, op).create_rls_row_visible_function()",
+            "typing.cast(alembic_ops.RLSOp, op).create_rls_row_visible_function("
+            "'projects', 'id', 'INTEGER')",
             rendered,
         )
         self.assertIn(
-            "typing.cast(alembic_ops.RLSOp, op).drop_rls_row_visible_function()",
+            "typing.cast(alembic_ops.RLSOp, op).drop_rls_row_visible_function("
+            "'projects', 'id', 'INTEGER')",
             rendered,
         )
 
@@ -1813,19 +1842,41 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
         with self.engine.begin() as connection:
             connection.execute(
                 sqlalchemy.text(
-                    "CREATE OR REPLACE FUNCTION rls_row_visible("
-                    "tbl regclass, key_column name, key anyelement) "
-                    "RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$"
+                    "CREATE OR REPLACE FUNCTION rls_visible_projects_id(integer) "
+                    "RETURNS boolean LANGUAGE plpgsql STABLE AS "
+                    "$$ BEGIN RETURN true; END $$"
                 )
             )
         with self.engine.connect() as connection:
             (op,) = self._upgrade_ops(connection)
         self.assertIsInstance(op, alembic_ops.CreateRowVisibleFunctionOp)
         self.assertTrue(op.replaces)
-        # The previous version may be used by other policies, so a
-        # downgrade does not drop it.
+        # The previous version is not known, so a downgrade leaves the
+        # function in place.
         self.assertIsInstance(op.reverse(), alembic_ops.CreateRowVisibleFunctionOp)
         self._upgrade(Base.metadata)
+
+    def test_unused_helper_function_is_dropped_last(self) -> None:
+        self._upgrade(Base.metadata)
+        stale = policy.RowVisibleFunction("authors", "id", "INTEGER")
+        with self.engine.begin() as connection:
+            connection.execute(sqlalchemy.text(stale.create_sql))
+            connection.execute(sqlalchemy.text("ALTER TABLE tags ADD COLUMN x int"))
+        with self.engine.connect() as connection:
+            ops = self._upgrade_ops(connection)
+        self.assertIsInstance(ops[-1], alembic_ops.DropRowVisibleFunctionOp)
+        self.assertEqual(ops[-1].to_function(), stale)
+        reverse = ops[-1].reverse()
+        self.assertIsInstance(reverse, alembic_ops.CreateRowVisibleFunctionOp)
+        self.assertEqual(reverse.to_function(), stale)
+        self._upgrade(Base.metadata)
+        with self.engine.connect() as connection:
+            self.assertIsNone(
+                connection.execute(
+                    sqlalchemy.text("SELECT to_regprocedure(:signature)"),
+                    {"signature": stale.signature},
+                ).scalar_one()
+            )
 
     def _authors_and_books(self, with_enabled: bool) -> typing.Any:
         """Books follow their author; with ``with_enabled``, only enabled

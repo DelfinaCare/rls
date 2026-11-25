@@ -34,12 +34,9 @@ def create_policies_no_commit(
             "rls.register.base_wrapper(Base) before create_policies_no_commit."
         )
     all_policies = policy_module.resolved_policies(Base.metadata)
-    if any(
-        policy_module.uses_row_visible_function(p)
-        for table_policies in all_policies.values()
-        for p in table_policies
-    ):
-        connection.execute(sqlalchemy.text(policy_module.ROW_VISIBLE_FUNCTION_SQL))
+    # Policies may call these helper functions, so they are created first.
+    for function in policy_module.row_visible_functions(Base.metadata):
+        connection.execute(sqlalchemy.text(function.create_sql.replace(":", "\\:")))
     for table, rls_settings in all_policies.items():
         if not rls_settings:
             continue
