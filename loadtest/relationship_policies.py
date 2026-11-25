@@ -300,9 +300,10 @@ def _load(connection: sqlalchemy.Connection, sizes: Sizes) -> None:
             SELECT i, 'article ' || i FROM generate_series(1, {sizes.articles}) i""",
         # Two tags per article.
         f"""INSERT INTO article_tags (article_id, tag_id)
-            SELECT i, t FROM generate_series(1, {sizes.articles}) i,
-            LATERAL (SELECT 1 + floor(random() * {sizes.tags})::int AS t1) r,
-            LATERAL (VALUES (r.t1), (1 + r.t1 % {sizes.tags})) v(t)
+            SELECT s.i, v.t
+            FROM (SELECT i, 1 + floor(random() * {sizes.tags})::int AS t1
+                  FROM generate_series(1, {sizes.articles}) i) s,
+            LATERAL (VALUES (s.t1), (1 + s.t1 % {sizes.tags})) v(t)
             ON CONFLICT DO NOTHING""",
     ]
     for statement in statements:
@@ -339,6 +340,105 @@ class Query:
     table: str
     name: str
     sql: str  # formatted with the account's parameters
+    # Writes run in a savepoint that is rolled back, so the data stays the
+    # same.  Their RETURNING ids are compared between variants.
+    write: bool = False
+    # Only checks that the write is rejected (not timed).
+    expect_denied: bool = False
+
+
+_NEW_ID = 90_000_000
+_BATCH = 500
+
+
+def _write_queries(
+    table: str, parent: str | None, columns: str, values: str
+) -> list[Query]:
+    """Inserts, updates and upserts of ``table``, whose policy follows
+    ``parent`` (a column of ``table``, None for many-to-many).
+
+    ``columns`` and ``values`` are the inserted columns and the values of a
+    new row, with ``{parent_value}`` and ``{new_id}`` placeholders.
+    """
+    singular = table[:-1]
+    queries = []
+
+    def insert(parent_value: str, new_id: str = str(_NEW_ID)) -> str:
+        return (
+            f"INSERT INTO {table} ({columns}) VALUES "
+            f"({values.format(parent_value=parent_value, new_id=new_id)})"
+        )
+
+    if parent is not None:
+        queries += [
+            Query(
+                table,
+                "insert_one",
+                insert(f"{{{parent}}}") + " RETURNING id",
+                write=True,
+            ),
+            Query(
+                table,
+                "insert_batch",
+                f"INSERT INTO {table} ({columns}) SELECT "
+                + values.format(
+                    new_id=f"{_NEW_ID} + i",
+                    parent_value=f"({{{parent}s}})[1 + i % cardinality({{{parent}s}})]",
+                )
+                + f" FROM generate_series(1, {_BATCH}) i RETURNING id",
+                write=True,
+            ),
+            Query(
+                table,
+                "update_reparent",
+                f"UPDATE {table} SET {parent} = {{{parent}2}} "
+                f"WHERE id = {{{singular}_id}} RETURNING id",
+                write=True,
+            ),
+            Query(
+                table,
+                "insert_denied",
+                insert(f"{{other_{parent}}}"),
+                write=True,
+                expect_denied=True,
+            ),
+        ]
+    else:
+        queries.append(
+            # A new row has no links yet.
+            Query(table, "insert_denied", insert(""), write=True, expect_denied=True)
+        )
+    upsert = " ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title RETURNING id"
+    queries += [
+        Query(
+            table,
+            "update_one",
+            f"UPDATE {table} SET title = 'updated' "
+            f"WHERE id = {{{singular}_id}} RETURNING id",
+            write=True,
+        ),
+        Query(
+            table,
+            "update_all",
+            f"UPDATE {table} SET title = title || '!' RETURNING id",
+            write=True,
+        ),
+        Query(
+            table,
+            "upsert_one",
+            f"INSERT INTO {table} ({columns}) SELECT * FROM "
+            f"(VALUES {{{singular}_rows}}) v LIMIT 1{upsert}",
+            write=True,
+        ),
+        Query(
+            table,
+            "upsert_batch",
+            f"INSERT INTO {table} ({columns}) SELECT * FROM "
+            f"(VALUES {{{singular}_rows}}) v{upsert}",
+            write=True,
+        ),
+    ]
+    return queries
 
 
 QUERIES = (
@@ -346,10 +446,22 @@ QUERIES = (
     Query("books", "point", "SELECT * FROM books WHERE id = {book_id}"),
     Query("books", "by_fk", "SELECT * FROM books WHERE author_id = {author_id}"),
     Query("books", "page", "SELECT * FROM books ORDER BY id LIMIT 50"),
+    *_write_queries(
+        "books",
+        "author_id",
+        "id, author_id, account_id, title",
+        "{new_id}, {parent_value}, {{account}}, 'new'",
+    ),
     Query("chapters", "count", "SELECT count(*) FROM chapters"),
     Query("chapters", "point", "SELECT * FROM chapters WHERE id = {chapter_id}"),
     Query("chapters", "by_fk", "SELECT * FROM chapters WHERE book_id = {book_id}"),
     Query("chapters", "page", "SELECT * FROM chapters ORDER BY id LIMIT 50"),
+    *_write_queries(
+        "chapters",
+        "book_id",
+        "id, book_id, account_id, title",
+        "{new_id}, {parent_value}, {{account}}, 'new'",
+    ),
     Query("articles", "count", "SELECT count(*) FROM articles"),
     Query("articles", "point", "SELECT * FROM articles WHERE id = {article_id}"),
     Query(
@@ -360,35 +472,79 @@ QUERIES = (
         "WHERE article_tags.tag_id = {tag_id} ORDER BY articles.id",
     ),
     Query("articles", "page", "SELECT * FROM articles ORDER BY id LIMIT 50"),
+    *_write_queries("articles", None, "id, title", "{new_id}, 'new'"),
 )
 
 
 def _account_params(
     connection: sqlalchemy.Connection, accounts: abc.Iterable[int]
-) -> dict[int, dict[str, int]]:
-    """Ids of rows each account can see, for the point and by_fk queries."""
-    params = {}
-    for account in accounts:
-        row = connection.execute(
-            sqlalchemy.text(
-                """SELECT
-                (SELECT min(id) FROM authors WHERE account_id = :a),
-                (SELECT min(id) FROM books WHERE account_id = :a),
-                (SELECT min(id) FROM chapters WHERE account_id = :a),
-                (SELECT min(id) FROM tags WHERE account_id = :a),
-                (SELECT min(article_id) FROM article_tags
-                 JOIN tags ON tags.id = article_tags.tag_id
-                 WHERE tags.account_id = :a)"""
-            ),
-            {"a": account},
-        ).one()
-        params[account] = dict(
-            zip(
-                ("author_id", "book_id", "chapter_id", "tag_id", "article_id"),
-                (value or 0 for value in row),
-                strict=True,
+) -> dict[int, dict[str, int | str]]:
+    """Ids of rows each account can see (and of a few it cannot), used by
+    the queries."""
+
+    def scalar(statement: str, account: int) -> int:
+        value: int | None = connection.execute(
+            sqlalchemy.text(statement), {"a": account}
+        ).scalar_one()
+        return value or 0
+
+    def rows(statement: str, account: int) -> list[tuple[int, ...]]:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                sqlalchemy.text(f"{statement} ORDER BY id LIMIT {_BATCH}"),
+                {"a": account},
             )
+        ]
+
+    def array(values: abc.Iterable[int]) -> str:
+        return f"ARRAY[{', '.join(map(str, values))}]::integer[]"
+
+    def values(rows: abc.Iterable[tuple[typing.Any, ...]]) -> str:
+        return ", ".join(
+            "(" + ", ".join(repr(value) for value in row) + ")" for row in rows
         )
+
+    visible_articles = (
+        "SELECT DISTINCT article_id AS id FROM article_tags "
+        "JOIN tags ON tags.id = article_tags.tag_id WHERE tags.account_id = :a"
+    )
+    params: dict[int, dict[str, int | str]] = {}
+    for account in accounts:
+        authors = [
+            row[0]
+            for row in rows("SELECT id FROM authors WHERE account_id = :a", account)
+        ]
+        books = rows("SELECT id, author_id FROM books WHERE account_id = :a", account)
+        chapters = rows(
+            "SELECT id, book_id FROM chapters WHERE account_id = :a", account
+        )
+        articles = [row[0] for row in rows(visible_articles, account)]
+        params[account] = {
+            "account": account,
+            "author_id": authors[0],
+            "author_id2": authors[-1],
+            "author_ids": array(authors),
+            "other_author_id": scalar(
+                "SELECT min(id) FROM authors WHERE account_id <> :a", account
+            ),
+            "book_id": books[0][0],
+            "book_id2": books[-1][0],
+            "book_ids": array(book for book, _ in books),
+            "other_book_id": scalar(
+                "SELECT min(id) FROM books WHERE account_id <> :a", account
+            ),
+            "chapter_id": chapters[0][0],
+            "tag_id": scalar("SELECT min(id) FROM tags WHERE account_id = :a", account),
+            "article_id": articles[0],
+            "book_rows": values(
+                (book, author, account, "upserted") for book, author in books
+            ),
+            "chapter_rows": values(
+                (chapter, book, account, "upserted") for chapter, book in chapters
+            ),
+            "article_rows": values((article, "upserted") for article in articles),
+        }
     return params
 
 
@@ -399,10 +555,14 @@ class Result:
     fingerprints: dict[int, str] = dataclasses.field(default_factory=dict)
 
 
+def _fingerprint(rows: abc.Iterable[typing.Any]) -> str:
+    return hashlib.sha256(repr(sorted(map(tuple, rows))).encode()).hexdigest()
+
+
 def _run(
     connection: sqlalchemy.Connection,
     query: Query,
-    params: dict[int, dict[str, int]],
+    params: dict[int, dict[str, int | str]],
     repeats: int,
 ) -> Result:
     result = Result()
@@ -412,17 +572,31 @@ def _run(
             {"a": str(account)},
         )
         statement = query.sql.format(**values)
-        rows = connection.execute(sqlalchemy.text(statement)).all()
-        result.fingerprints[account] = hashlib.sha256(
-            repr(sorted(map(tuple, rows))).encode()
-        ).hexdigest()
+        # A savepoint keeps the context set above when a write is undone.
+        savepoint = connection.begin_nested()
+        try:
+            cursor = connection.execute(sqlalchemy.text(statement))
+            rows = cursor.all() if cursor.returns_rows else []
+        except sqlalchemy.exc.DBAPIError as error:
+            savepoint.rollback()
+            if not query.expect_denied or "row-level security" not in str(error):
+                raise
+            result.fingerprints[account] = "denied"
+            continue
+        savepoint.rollback()
+        if query.expect_denied:
+            result.fingerprints[account] = "allowed"
+            continue
+        result.fingerprints[account] = _fingerprint(rows)
         for _ in range(repeats):
+            savepoint = connection.begin_nested()
             plan: dict[str, typing.Any]
             (plan,) = connection.execute(
                 sqlalchemy.text(
                     f"EXPLAIN (ANALYZE, TIMING OFF, FORMAT JSON) {statement}"
                 )
             ).scalar_one()
+            savepoint.rollback()
             result.exec_ms.append(plan["Execution Time"])
             result.plan_ms.append(plan["Planning Time"])
     return result
@@ -467,6 +641,12 @@ def main(argv: list[str] | None = None) -> None:
         metavar="TABLE.QUERY",
         help="print the plan of one query for each variant and exit",
     )
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="TEXT",
+        help="only run the queries whose TABLE.QUERY name contains one of these",
+    )
     parser.add_argument("--url", help="use this (empty) database")
     args = parser.parse_args(argv)
     sizes = Sizes.scaled(args.scale, args.accounts)
@@ -482,7 +662,8 @@ def main(argv: list[str] | None = None) -> None:
             connection.execute(
                 sqlalchemy.text(
                     f"CREATE ROLE {ROLE} LOGIN PASSWORD '{ROLE}';"
-                    f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {ROLE};"
+                    "GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public "
+                    f"TO {ROLE};"
                 )
             )
         with admin.connect().execution_options(
@@ -528,10 +709,18 @@ def main(argv: list[str] | None = None) -> None:
                 for query in QUERIES:
                     if not complete and _variant_exprs()[variant][query.table] is None:
                         continue
-                    print(f"{variant:16} {query.table}.{query.name}", file=sys.stderr)
+                    label = f"{query.table}.{query.name}"
+                    if args.only and not any(text in label for text in args.only):
+                        continue
+                    print(f"{variant:16} {label}", file=sys.stderr)
                     results.setdefault((query.table, query.name), {})[variant] = _run(
                         connection, query, params, args.repeats
                     )
+            # Clean up the row versions left by the rolled back writes.
+            with admin.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as connection:
+                connection.execute(sqlalchemy.text("VACUUM"))
 
         _report(results, args.variants, sizes)
 
@@ -554,9 +743,11 @@ def _report(
             if result is None:
                 cells.append("n/a")
                 continue
-            cell = (
-                f"{statistics.median(result.exec_ms):.2f} ({_p95(result.exec_ms):.2f})"
-            )
+            if not result.exec_ms:  # expect_denied
+                cell = "/".join(sorted(set(result.fingerprints.values())))
+            else:
+                median = statistics.median(result.exec_ms)
+                cell = f"{median:.2f} ({_p95(result.exec_ms):.2f})"
             if (
                 variant != "none"
                 and reference is not None
