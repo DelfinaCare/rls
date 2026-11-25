@@ -615,8 +615,18 @@ def _run(
     query: Query,
     params: dict[int, dict[str, int | str]],
     repeats: int,
+    clean_up: abc.Callable[[], None],
 ) -> Result:
     result = Result()
+
+    def undo(savepoint: sqlalchemy.NestedTransaction) -> None:
+        savepoint.rollback()
+        if query.write:
+            # End the transaction and vacuum away the rolled back row
+            # versions, which would otherwise slow down every later query.
+            connection.commit()
+            clean_up()
+
     for account, values in params.items():
         connection.execute(
             sqlalchemy.text("SELECT set_config('rls.account_id', :a, false)"),
@@ -629,12 +639,12 @@ def _run(
             cursor = connection.execute(sqlalchemy.text(statement))
             rows = cursor.all() if cursor.returns_rows else []
         except sqlalchemy.exc.DBAPIError as error:
-            savepoint.rollback()
+            undo(savepoint)
             if not query.expect_denied or "row-level security" not in str(error):
                 raise
             result.fingerprints[account] = "denied"
             continue
-        savepoint.rollback()
+        undo(savepoint)
         if query.expect_denied:
             result.fingerprints[account] = "allowed"
             continue
@@ -647,7 +657,7 @@ def _run(
                     f"EXPLAIN (ANALYZE, TIMING OFF, FORMAT JSON) {statement}"
                 )
             ).scalar_one()
-            savepoint.rollback()
+            undo(savepoint)
             result.exec_ms.append(plan["Execution Time"])
             result.plan_ms.append(plan["Planning Time"])
     return result
@@ -752,6 +762,11 @@ def main(argv: list[str] | None = None) -> None:
                     print("\n".join(lines))
             return
 
+        maintenance = admin.connect().execution_options(isolation_level="AUTOCOMMIT")
+
+        def vacuum() -> None:
+            maintenance.execute(sqlalchemy.text("VACUUM"))
+
         results: dict[tuple[str, str], dict[str, Result]] = {}
         for variant in args.variants:
             with admin.begin() as connection:
@@ -765,13 +780,9 @@ def main(argv: list[str] | None = None) -> None:
                         continue
                     print(f"{variant:16} {label}", file=sys.stderr)
                     results.setdefault((query.table, query.name), {})[variant] = _run(
-                        connection, query, params, args.repeats
+                        connection, query, params, args.repeats, vacuum
                     )
-            # Clean up the row versions left by the rolled back writes.
-            with admin.connect().execution_options(
-                isolation_level="AUTOCOMMIT"
-            ) as connection:
-                connection.execute(sqlalchemy.text("VACUUM"))
+        maintenance.close()
 
         _report(results, args.variants, sizes)
 
