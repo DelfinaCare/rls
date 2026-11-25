@@ -429,21 +429,23 @@ def _register_late_schema_comparator(
 
 
 @_register_late_schema_comparator
-def defer_policy_creation(
+def reorder_policy_operations(
     autogen_context: autogenerate_api.AutogenContext,
     upgrade_ops: migrate_ops.UpgradeOps,
     schemas: typing.Any,
 ) -> None:
-    """Create policies once every other schema change of the migration is
-    done.
+    """Drop policies before, and create policies after, every other schema
+    change of the migration.
 
     Alembic emits the operations of each table together, but a policy may
     read other tables (e.g. one derived from a relationship reads the
-    related or association table) and their columns, which may be created
-    or altered later in the same migration.  If the migration changes the
-    schema, all policy creations are therefore moved to its end.  The other
-    operations (e.g. creating indexes that later foreign keys rely on, or
-    dropping old policies) stay where they are.
+    related or association table) and their columns.  Postgres rejects
+    dropping a table or column that an existing policy reads, and creating a
+    policy that reads one that does not exist yet, and either may happen
+    elsewhere in the same migration.  If the migration changes the schema,
+    all policy drops are therefore moved to its start and all policy
+    creations to its end.  The other operations (e.g. creating indexes that
+    later foreign keys rely on) stay where they are.
     """
     if alembic_generation_suppressed():
         return
@@ -455,23 +457,29 @@ def defer_policy_creation(
     )
     if not changes_schema:
         return
-    deferred: list[migrate_ops.MigrateOperation] = []
+    drops: list[migrate_ops.MigrateOperation] = []
+    creates: list[migrate_ops.MigrateOperation] = []
     for op in top_level:
         if not isinstance(op, migrate_ops.ModifyTableOps):
             continue
-        creates = [sub_op for sub_op in op.ops if isinstance(sub_op, CreatePolicyOp)]
-        if creates:
-            op.ops = [
-                sub_op for sub_op in op.ops if not isinstance(sub_op, CreatePolicyOp)
-            ]
-            deferred.append(
-                migrate_ops.ModifyTableOps(op.table_name, creates, schema=op.schema)
-            )
-    top_level[:] = [
-        op
-        for op in top_level
-        if not (isinstance(op, migrate_ops.ModifyTableOps) and not op.ops)
-    ] + deferred
+        for kind, moved in ((DropPolicyOp, drops), (CreatePolicyOp, creates)):
+            matching = [sub_op for sub_op in op.ops if isinstance(sub_op, kind)]
+            if matching:
+                op.ops = [sub_op for sub_op in op.ops if not isinstance(sub_op, kind)]
+                moved.append(
+                    migrate_ops.ModifyTableOps(
+                        op.table_name, matching, schema=op.schema
+                    )
+                )
+    top_level[:] = (
+        drops
+        + [
+            op
+            for op in top_level
+            if not (isinstance(op, migrate_ops.ModifyTableOps) and not op.ops)
+        ]
+        + creates
+    )
 
 
 class _PolicyOp(alembic_operations.MigrateOperation):

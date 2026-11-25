@@ -1546,6 +1546,91 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
         self.assertIn(Book.__tablename__, AlterBase.metadata.tables)
         self._upgrade(AlterBase.metadata)
 
+    def _authors_and_books(self, with_enabled: bool) -> typing.Any:
+        """Books follow their author; with ``with_enabled``, only enabled
+        authors, so the books' policy reads ``authors.enabled``."""
+        VersionBase: typing.Any = _new_base()
+
+        class Author(VersionBase):
+            __tablename__ = "authors"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            if with_enabled:
+                enabled = sqlalchemy.Column(sqlalchemy.Boolean)
+            __rls_policies__ = _owner_policies()
+
+        class Book(VersionBase):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            author_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("authors.id")
+            )
+            if with_enabled:
+                author = orm.relationship(
+                    Author,
+                    primaryjoin=lambda: sqlalchemy.and_(
+                        Book.author_id == Author.id,
+                        Author.enabled == sql.true(),
+                    ),
+                )
+            else:
+                author = orm.relationship(Author)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("author")
+            ]
+
+        VersionBase.models = (Author, Book)
+        return VersionBase
+
+    def test_policies_are_dropped_before_columns_they_read(self) -> None:
+        self._upgrade(self._authors_and_books(with_enabled=True).metadata)
+        self._upgrade(self._authors_and_books(with_enabled=False).metadata)
+
+    def _books_with_tags(self, with_tags: bool) -> typing.Any:
+        """With ``with_tags``, books follow their tags (so the books' policy
+        reads ``book_tags`` and ``tags``); otherwise books have an owner and
+        the ``book_tags`` association table is dropped."""
+        VersionBase: typing.Any = _new_base()
+        models: list[typing.Any] = []
+        if with_tags:
+            book_tags = sqlalchemy.Table(
+                "book_tags",
+                VersionBase.metadata,
+                sqlalchemy.Column(
+                    "book_id", sqlalchemy.ForeignKey("books.id"), primary_key=True
+                ),
+                sqlalchemy.Column(
+                    "tag_id", sqlalchemy.ForeignKey("tags.id"), primary_key=True
+                ),
+            )
+            register.table_policies(book_tags, [_owner_policy("tag_id")])
+
+        class Tag(VersionBase):
+            __tablename__ = "tags"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _owner_policies()
+
+        models.append(Tag)
+
+        class Book(VersionBase):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            owner_id = sqlalchemy.Column(sqlalchemy.Integer)
+            if with_tags:
+                tags = orm.relationship("Tag", secondary=book_tags)
+                __rls_policies__: typing.ClassVar[_Policies] = [
+                    policy.Policy.from_relationship("tags")
+                ]
+            else:
+                __rls_policies__ = _owner_policies("owner_id")
+
+        models.append(Book)
+        VersionBase.models = models
+        return VersionBase
+
+    def test_policies_are_dropped_before_tables_they_read(self) -> None:
+        self._upgrade(self._books_with_tags(with_tags=True).metadata)
+        self._upgrade(self._books_with_tags(with_tags=False).metadata)
+
 
 if __name__ == "__main__":
     unittest.main()

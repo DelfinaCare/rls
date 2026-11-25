@@ -36,6 +36,8 @@ Policies declared as `ExternalPolicy` are managed outside of this package: autog
 
 Policies declared with `Policy.from_relationship` are built from the relationship's join condition when autogenerate runs, which configures the SQLAlchemy mappers. Like any other policy, their name ends with a hash of the generated expression, so changing the relationship's join (e.g. renaming the foreign key column) drops and re-creates the policy.
 
+Policies can read other tables and their columns, so when a migration also changes the schema, autogenerate drops policies at the start of the migration and creates them at its end, with all other operations in between. That way a policy never reads a table or column that does not exist yet, and never blocks dropping one. A migration that only changes RLS keeps each table's operations together.
+
 **Warning**: autogenerate drops any policy on a table in your metadata that is not declared in `__rls_policies__`, and disables RLS on tables that declare no policies.
 
 **Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
