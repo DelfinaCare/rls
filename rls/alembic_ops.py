@@ -411,6 +411,65 @@ def compare_table_level(
     modify_ops.ops.extend(create_ops)
 
 
+def _register_late_schema_comparator(
+    fn: typing.Callable[..., typing.Any],
+) -> typing.Callable[..., typing.Any]:
+    """Register ``fn`` to run after Alembic has compared all tables."""
+    try:
+        from alembic.util import DispatchPriority
+    except ImportError:  # alembic < 1.18
+        # Functions run in registration order, and Alembic registers its
+        # own table comparison when it is imported.
+        return autogenerate.comparators.dispatch_for("schema")(fn)
+    # Alembic >= 1.18 adds its own comparators after the ones registered
+    # here, so this one must run with the last priority.
+    return autogenerate.comparators.dispatch_for(
+        "schema", priority=DispatchPriority.LAST
+    )(fn)
+
+
+@_register_late_schema_comparator
+def defer_policies_of_new_tables(
+    autogen_context: autogenerate_api.AutogenContext,
+    upgrade_ops: migrate_ops.UpgradeOps,
+    schemas: typing.Any,
+) -> None:
+    """Create the policies of new tables once all new tables exist.
+
+    Alembic emits the operations of a new table right after creating it,
+    but a policy may read other tables (e.g. one derived from a
+    relationship reads the related or association table), which may be
+    created later in the same migration.  The operations of new tables
+    that create policies are therefore moved after the last table creation.
+    """
+    if alembic_generation_suppressed():
+        return
+    top_level = upgrade_ops.ops
+    created = [
+        (op.schema, op.table_name)
+        for op in top_level
+        if isinstance(op, migrate_ops.CreateTableOp)
+    ]
+    if not created:
+        return
+    new_tables = set(created)
+    deferred = [
+        op
+        for op in top_level
+        if isinstance(op, migrate_ops.ModifyTableOps)
+        and (op.schema, op.table_name) in new_tables
+        and any(isinstance(sub_op, CreatePolicyOp) for sub_op in op.ops)
+    ]
+    if not deferred:
+        return
+    remaining = [op for op in top_level if not any(op is d for d in deferred)]
+    last_create = max(
+        i for i, op in enumerate(remaining) if isinstance(op, migrate_ops.CreateTableOp)
+    )
+    remaining[last_create + 1 : last_create + 1] = deferred
+    top_level[:] = remaining
+
+
 class _PolicyOp(alembic_operations.MigrateOperation):
     """Base class of the operations that create or drop an RLS policy."""
 

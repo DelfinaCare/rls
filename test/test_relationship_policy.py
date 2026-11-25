@@ -6,6 +6,7 @@ import sqlalchemy
 import testing.postgresql
 from alembic import autogenerate
 from alembic import migration
+from alembic import operations as alembic_operations
 from alembic.operations import ops as alembic_ops_module
 from sqlalchemy import exc
 from sqlalchemy import orm
@@ -612,6 +613,162 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
         ):
             policy.resolved_policies(Base.metadata)
 
+    def test_single_table_inheritance_target_raises(self) -> None:
+        """The discriminator criterion of a single table inheritance
+        subclass is not part of the join condition, so the policy would
+        also match rows of the other classes."""
+        Base: typing.Any = _new_base()
+
+        class Person(Base):
+            __tablename__ = "people"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            kind = sqlalchemy.Column(sqlalchemy.String)
+            __mapper_args__: typing.ClassVar[dict[str, typing.Any]] = {
+                "polymorphic_on": kind,
+                "polymorphic_identity": "person",
+            }
+            __rls_policies__ = _owner_policies()
+
+        class Admin(Person):
+            __mapper_args__: typing.ClassVar[dict[str, typing.Any]] = {
+                "polymorphic_identity": "admin"
+            }
+
+        class Ticket(Base):
+            __tablename__ = "tickets"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            admin_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("people.id")
+            )
+            admin = orm.relationship(Admin)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("admin")
+            ]
+
+        self.assertIn(Ticket.__tablename__, Base.metadata.tables)
+        for condition_arg in (None, _ACCOUNT_ID):
+            with self.subTest(condition_arg=condition_arg):
+                Ticket.__rls_policies__[0] = policy.Policy.from_relationship(
+                    "admin", condition_arg=condition_arg
+                )
+                with self.assertRaisesRegex(
+                    ValueError, r"Ticket\.admin: .*single table inheritance"
+                ):
+                    policy.resolved_policies(Base.metadata)
+
+    def _book_with_enabled_author(
+        self, condition_arg: policy.ConditionArg | None
+    ) -> typing.Any:
+        Base: typing.Any = _new_base()
+
+        class Author(Base):
+            __tablename__ = "authors"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _owner_policies()
+
+        class Book(Base):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            enabled = sqlalchemy.Column(sqlalchemy.Boolean)
+            author_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("authors.id")
+            )
+            author = orm.relationship(
+                Author,
+                primaryjoin=lambda: sqlalchemy.and_(
+                    Book.author_id == Author.id, Book.enabled == sql.true()
+                ),
+            )
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship(
+                    "author", condition_arg=condition_arg, allow_bypass_rls=False
+                )
+            ]
+
+        return Base
+
+    def test_extra_join_criteria_are_kept(self) -> None:
+        Base = self._book_with_enabled_author(condition_arg=None)
+        self.assertEqual(
+            _exprs(Base, "books"),
+            [
+                (
+                    "EXISTS (SELECT 1 FROM authors WHERE "
+                    "books.author_id = authors.id AND books.enabled = true)"
+                )
+            ],
+        )
+
+    def test_extra_join_criteria_with_condition_arg_raise(self) -> None:
+        Base = self._book_with_enabled_author(condition_arg=_ACCOUNT_ID)
+        with self.assertRaisesRegex(ValueError, r"Book\.author: .*other criteria"):
+            policy.resolved_policies(Base.metadata)
+
+    def test_extra_secondary_join_criteria_with_condition_arg_raise(self) -> None:
+        Base: typing.Any = _new_base()
+        memberships = sqlalchemy.Table(
+            "memberships",
+            Base.metadata,
+            sqlalchemy.Column("team_id", sqlalchemy.ForeignKey("teams.id")),
+            sqlalchemy.Column("member_id", sqlalchemy.ForeignKey("members.id")),
+            sqlalchemy.Column("active", sqlalchemy.Boolean),
+        )
+        register.table_policies(memberships, [_owner_policy("member_id")])
+
+        class Member(Base):
+            __tablename__ = "members"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+
+        class Team(Base):
+            __tablename__ = "teams"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            members = orm.relationship(
+                Member,
+                secondary=memberships,
+                secondaryjoin=lambda: sqlalchemy.and_(
+                    Member.id == memberships.c.member_id,
+                    memberships.c.active == sql.true(),
+                ),
+            )
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("members", condition_arg=_ACCOUNT_ID)
+            ]
+
+        self.assertIn(Team.__tablename__, Base.metadata.tables)
+        with self.assertRaisesRegex(ValueError, r"Team\.members: .*other criteria"):
+            policy.resolved_policies(Base.metadata)
+
+    def test_cycle_check_visits_shared_tables_once(self) -> None:
+        """Each layer's two tables both read both tables of the next layer,
+        so there are 2**layers paths through the graph."""
+        Base: typing.Any = _new_base()
+        layers = 40
+        # The class registry only holds weak references.
+        models = []
+        for layer in reversed(range(layers)):
+            for name in ("a", "b"):
+                attrs: dict[str, typing.Any] = {
+                    "__tablename__": f"{name}{layer}",
+                    "id": sqlalchemy.Column(sqlalchemy.Integer, primary_key=True),
+                }
+                if layer == layers - 1:
+                    attrs["__rls_policies__"] = _owner_policies()
+                else:
+                    attrs["__rls_policies__"] = []
+                    for target in ("a", "b"):
+                        attrs[f"{target}_id"] = sqlalchemy.Column(
+                            sqlalchemy.Integer,
+                            sqlalchemy.ForeignKey(f"{target}{layer + 1}.id"),
+                        )
+                        attrs[target] = orm.relationship(f"{target.upper()}{layer + 1}")
+                        attrs["__rls_policies__"].append(
+                            policy.Policy.from_relationship(target)
+                        )
+                models.append(type(f"{name.upper()}{layer}", (Base,), attrs))
+
+        self.assertEqual(len(models), 2 * layers)
+        self.assertEqual(len(_exprs(Base, "a0")), 2)
+
 
 class _Context(pydantic.BaseModel):
     account_id: int | None = None
@@ -1133,6 +1290,62 @@ class RelationshipPolicyEndToEndTests(unittest.TestCase):
 
     def test_autogenerate_has_no_diff_once_policies_exist(self) -> None:
         self.assertEqual(self.ops_after, {})
+
+
+class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
+    """Policies read other tables, so they must only be created once every
+    table of the migration exists."""
+
+    def setUp(self) -> None:
+        self.postgresql = testing.postgresql.Postgresql(
+            postgres_args="-h 127.0.0.1 -F -c logging_collector=off"
+        )
+        self.addCleanup(self.postgresql.stop)
+        url = sqlalchemy.engine.make_url(self.postgresql.url()).set(
+            drivername="postgresql+psycopg"
+        )
+        self.engine = sqlalchemy.create_engine(url)
+        self.addCleanup(self.engine.dispose)
+
+    def _upgrade_ops(self, connection: sqlalchemy.Connection) -> list:
+        context = migration.MigrationContext.configure(
+            connection, opts={"target_metadata": Base.metadata}
+        )
+        script = autogenerate.produce_migrations(context, Base.metadata)
+        assert script.upgrade_ops is not None
+        return list(script.upgrade_ops.ops)
+
+    def test_policies_are_created_after_all_tables(self) -> None:
+        with self.engine.connect() as connection:
+            ops = self._upgrade_ops(connection)
+        kinds = [
+            "create_table"
+            if isinstance(op, alembic_ops_module.CreateTableOp)
+            else "policies"
+            for op in ops
+        ]
+        self.assertEqual(
+            kinds,
+            ["create_table"] * len(Base.metadata.tables)
+            + ["policies"] * (len(kinds) - len(Base.metadata.tables)),
+        )
+
+    def test_upgrade_from_empty_database(self) -> None:
+        with self.engine.begin() as connection:
+            operations = alembic_operations.Operations(
+                migration.MigrationContext.configure(connection)
+            )
+
+            def invoke(ops: list) -> None:
+                for op in ops:
+                    if isinstance(op, alembic_ops_module.ModifyTableOps):
+                        invoke(op.ops)
+                    else:
+                        operations.invoke(op)
+
+            invoke(self._upgrade_ops(connection))
+        with self.engine.connect() as connection:
+            self.assertEqual(self._upgrade_ops(connection), [])
 
 
 if __name__ == "__main__":

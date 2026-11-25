@@ -12,6 +12,7 @@ from sqlalchemy import sql
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import interfaces as orm_interfaces
 from sqlalchemy.sql import elements
+from sqlalchemy.sql import operators
 from sqlalchemy.sql import util as sql_util
 from sqlalchemy.sql import visitors
 
@@ -461,6 +462,23 @@ def _policy_table_column(column: sqlalchemy.Column) -> elements.ColumnElement:
     )
 
 
+def _is_column_equality(
+    expr: elements.ColumnElement,
+    a: elements.ColumnElement,
+    b: elements.ColumnElement,
+) -> bool:
+    """Whether ``expr`` is exactly ``a = b`` (in either order), with no
+    other criteria."""
+    if not isinstance(expr, elements.BinaryExpression):
+        return False
+    if expr.operator is not operators.eq:
+        return False
+    left, right = expr.left, expr.right
+    return (left.compare(a) and right.compare(b)) or (
+        left.compare(b) and right.compare(a)
+    )
+
+
 class RelationshipPolicy(pydantic.BaseModel):
     """A policy derived from a relationship, see ``Policy.from_relationship``.
 
@@ -511,6 +529,19 @@ class RelationshipPolicy(pydantic.BaseModel):
                 f"{mapper.class_.__name__} has no relationship named "
                 f"{self.relationship!r} (relationships: "
                 f"{sorted(mapper.relationships.keys())})",
+            )
+        target_mapper = prop.mapper
+        if target_mapper.single and target_mapper.inherits is not None:
+            # SQLAlchemy restricts such relationships to the subclass with a
+            # discriminator criterion that is not part of the join
+            # condition, so a policy built from the join alone would also
+            # match rows of the other classes sharing the table.
+            raise self._error(
+                mapper,
+                f"it targets {target_mapper.class_.__name__}, which uses "
+                "single table inheritance, and the policy cannot include "
+                "the criterion that limits rows to that class. Use "
+                "Policy.from_sqla instead.",
             )
         local_table = mapper.local_table
         secondary = prop.secondary
@@ -584,6 +615,16 @@ class RelationshipPolicy(pydantic.BaseModel):
             f"{prop.mapper.class_.__name__} alone. Use Policy.from_sqla "
             "instead.",
         )
+        # The context value replaces the related row, so the join condition
+        # must be the key equality alone: any other criteria in it would be
+        # dropped, making the policy broader than the relationship.
+        not_simple_error = self._error(
+            mapper,
+            "condition_arg replaces the relationship's join condition with "
+            "a comparison of its key column, but the join condition has "
+            "other criteria that the policy would drop. Use Policy.from_sqla "
+            "instead.",
+        )
         if prop.direction is orm_interfaces.MANYTOONE:
             pairs = prop.local_remote_pairs
             if (
@@ -592,6 +633,8 @@ class RelationshipPolicy(pydantic.BaseModel):
                 or pairs[0][0].table is not local_table
             ):
                 raise key_error
+            if not _is_column_equality(prop.primaryjoin, pairs[0][0], primary_key[0]):
+                raise not_simple_error
             foreign_key = _policy_table_column(
                 typing.cast(sqlalchemy.Column, pairs[0][0])
             )
@@ -600,8 +643,12 @@ class RelationshipPolicy(pydantic.BaseModel):
             secondary_pairs = prop.secondary_synchronize_pairs or ()
             if len(secondary_pairs) != 1 or secondary_pairs[0][0] is not primary_key[0]:
                 raise key_error
-            check_not_self_referential({secondary})
             association_key = secondary_pairs[0][1]
+            if prop.secondaryjoin is None or not _is_column_equality(
+                prop.secondaryjoin, primary_key[0], association_key
+            ):
+                raise not_simple_error
+            check_not_self_referential({secondary})
             return (
                 lambda value: exists(secondary, primaryjoin, association_key == value)
             ), frozenset({secondary})
@@ -690,7 +737,13 @@ def _check_no_recursion(
                     relationship_policy.referenced_tables(mapper)
                 )
 
+    # Tables whose reads have been fully explored and are known to be
+    # acyclic, so shared dependencies are only explored once.
+    done: set[str] = set()
+
     def visit(table_name: str, path: tuple[str, ...]) -> None:
+        if table_name in done:
+            return
         if table_name in path:
             cycle = [*path[path.index(table_name) :], table_name]
             raise ValueError(
@@ -701,6 +754,7 @@ def _check_no_recursion(
             )
         for other in sorted(reads.get(table_name, ())):
             visit(other, (*path, table_name))
+        done.add(table_name)
 
     for table_name in sorted(reads):
         visit(table_name, ())

@@ -174,6 +174,7 @@ The first argument is the name of the relationship attribute. There are two kind
 - The related table's policies only apply if the querying role is subject to them: it needs `SELECT` on the related (and association) table and must not bypass their RLS (a table owner does when the table's [RLS mode](#rls-mode) is `enable`).
 - A row with no related row (e.g. a `NULL` foreign key) is only accessible with `bypass_rls()`.
 - Relationship policies must not read each other's tables in a cycle (e.g. `Book` following `author` while `Author` follows `books`), and a self-referential relationship cannot be followed. Postgres rejects both as infinite recursion, so they raise a `ValueError`. The cycle check does not take `roles` into account.
+- A relationship to a single table inheritance subclass raises a `ValueError`: SQLAlchemy limits it to that subclass with a criterion that is not part of the join condition, so the policy would also match rows of the other classes sharing the table.
 
 **With `condition_arg`**, a row is accessible when it is related to the row whose primary key equals that context value, without consulting the related table's policies:
 
@@ -187,7 +188,7 @@ Policy.from_relationship("author", condition_arg=account_id)
 Policy.from_relationship("members", condition_arg=account_id)
 ```
 
-This is supported for many-to-one and many-to-many relationships that join on the related model's single-column primary key; anything else raises a `ValueError` and needs `Policy.from_sqla`.
+This is supported for many-to-one and many-to-many relationships that join on the related model's single-column primary key, and only when that key equality is the whole join condition (for many-to-many, the whole `secondaryjoin`): extra criteria such as `Book.enabled == true()` would be dropped from the policy. Anything else raises a `ValueError` and needs `Policy.from_sqla`. Without `condition_arg`, the full join condition is kept.
 
 ##### Many-to-many and one-to-many relationships
 
