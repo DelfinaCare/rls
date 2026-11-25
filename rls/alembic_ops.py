@@ -429,37 +429,35 @@ def _register_late_schema_comparator(
 
 
 @_register_late_schema_comparator
-def defer_policies_of_new_tables(
+def defer_policy_creation(
     autogen_context: autogenerate_api.AutogenContext,
     upgrade_ops: migrate_ops.UpgradeOps,
     schemas: typing.Any,
 ) -> None:
-    """Create the policies of new tables once all new tables exist.
+    """Create policies once every other schema change of the migration is
+    done.
 
-    Alembic emits the operations of a new table right after creating it,
-    but a policy may read other tables (e.g. one derived from a
-    relationship reads the related or association table), which may be
-    created later in the same migration.  The policy creations of new tables
-    are therefore moved after the last table creation.  Their other
-    operations (e.g. creating indexes that later foreign keys rely on) stay
-    where they are.
+    Alembic emits the operations of each table together, but a policy may
+    read other tables (e.g. one derived from a relationship reads the
+    related or association table) and their columns, which may be created
+    or altered later in the same migration.  If the migration changes the
+    schema, all policy creations are therefore moved to its end.  The other
+    operations (e.g. creating indexes that later foreign keys rely on, or
+    dropping old policies) stay where they are.
     """
     if alembic_generation_suppressed():
         return
     top_level = upgrade_ops.ops
-    new_tables = {
-        (op.schema, op.table_name)
+    changes_schema = any(
+        not isinstance(op, migrate_ops.ModifyTableOps)
+        or not all(isinstance(sub_op, _RLS_OPS) for sub_op in op.ops)
         for op in top_level
-        if isinstance(op, migrate_ops.CreateTableOp)
-    }
-    if not new_tables:
+    )
+    if not changes_schema:
         return
     deferred: list[migrate_ops.MigrateOperation] = []
     for op in top_level:
-        if not (
-            isinstance(op, migrate_ops.ModifyTableOps)
-            and (op.schema, op.table_name) in new_tables
-        ):
+        if not isinstance(op, migrate_ops.ModifyTableOps):
             continue
         creates = [sub_op for sub_op in op.ops if isinstance(sub_op, CreatePolicyOp)]
         if creates:
@@ -469,18 +467,11 @@ def defer_policies_of_new_tables(
             deferred.append(
                 migrate_ops.ModifyTableOps(op.table_name, creates, schema=op.schema)
             )
-    if not deferred:
-        return
-    remaining = [
+    top_level[:] = [
         op
         for op in top_level
         if not (isinstance(op, migrate_ops.ModifyTableOps) and not op.ops)
-    ]
-    last_create = max(
-        i for i, op in enumerate(remaining) if isinstance(op, migrate_ops.CreateTableOp)
-    )
-    remaining[last_create + 1 : last_create + 1] = deferred
-    top_level[:] = remaining
+    ] + deferred
 
 
 class _PolicyOp(alembic_operations.MigrateOperation):
@@ -638,3 +629,7 @@ def render_drop_policy(
     autogen_context: autogenerate_api.AutogenContext, op: DropPolicyOp
 ) -> str:
     return _render_policy_op(autogen_context, "drop_policy", op)
+
+
+# The operations of this module, which do not change the schema of tables.
+_RLS_OPS = (EnableRlsOp, DisableRlsOp, CreatePolicyOp, DropPolicyOp)

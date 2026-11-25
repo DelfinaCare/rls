@@ -128,6 +128,10 @@ def base_wrapper(
     # Call the hook for already mapped classes.
     for mapper in Base.registry.mappers:
         base_wrapper_hook(mapper, mapper.class_)
+    if context_model is not None:
+        # Also checks policies declared with table_policies before the
+        # context model was given.
+        validate_context(Base, context_model)
     return Base
 
 

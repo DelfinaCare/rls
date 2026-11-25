@@ -661,6 +661,21 @@ class RelationshipPolicy(pydantic.BaseModel):
                 prop.secondaryjoin, primary_key[0], association_key
             ):
                 raise not_simple_error
+            # Without the secondary join, columns of the related table in
+            # the primary join would not be correlated with the linked row.
+            for element in visitors.iterate(prop.primaryjoin):
+                if (
+                    isinstance(element, sqlalchemy.Column)
+                    and element.table is not local_table
+                    and element.table is not secondary
+                ):
+                    raise self._error(
+                        mapper,
+                        "condition_arg replaces the related row with a "
+                        "comparison of the association table's key column, "
+                        f"but the join condition uses column {element} of "
+                        "the related table. Use Policy.from_sqla instead.",
+                    )
             check_not_self_referential({secondary})
             return (
                 lambda value: exists(secondary, primaryjoin, association_key == value)

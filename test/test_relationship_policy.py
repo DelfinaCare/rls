@@ -847,6 +847,46 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
         ):
             policy.resolved_policies(Base.metadata)
 
+    def test_target_columns_in_primary_join_with_condition_arg_raise(
+        self,
+    ) -> None:
+        """Without the secondary join, a related-table column in the primary
+        join would not be correlated with the linked row."""
+        Base: typing.Any = _new_base()
+        memberships = sqlalchemy.Table(
+            "memberships",
+            Base.metadata,
+            sqlalchemy.Column("team_id", sqlalchemy.ForeignKey("teams.id")),
+            sqlalchemy.Column("member_id", sqlalchemy.ForeignKey("members.id")),
+        )
+        register.table_policies(memberships, [_owner_policy("member_id")])
+
+        class Member(Base):
+            __tablename__ = "members"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            active = sqlalchemy.Column(sqlalchemy.Boolean)
+
+        class Team(Base):
+            __tablename__ = "teams"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            members = orm.relationship(
+                Member,
+                secondary=memberships,
+                primaryjoin=lambda: sqlalchemy.and_(
+                    Team.id == memberships.c.team_id, Member.active == sql.true()
+                ),
+                viewonly=True,
+            )
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("members", condition_arg=_ACCOUNT_ID)
+            ]
+
+        self.assertIn(Team.__tablename__, Base.metadata.tables)
+        with self.assertRaisesRegex(
+            ValueError, r"Team\.members: .*column members\.active"
+        ):
+            policy.resolved_policies(Base.metadata)
+
 
 class _Context(pydantic.BaseModel):
     account_id: int | None = None
@@ -932,6 +972,18 @@ class TestTablePolicies(unittest.TestCase):
         register.base_wrapper(Base, context_model=Other)
         with self.assertRaisesRegex(ValueError, r"reads \['account_id'\]"):
             register.table_policies(self._table(Base), [_owner_policy("left_id")])
+
+    def test_context_model_given_later_checks_table_policies(self) -> None:
+        class Base(orm.DeclarativeBase):
+            pass
+
+        class Other(pydantic.BaseModel):
+            tenant_id: int
+
+        register.base_wrapper(Base)
+        register.table_policies(self._table(Base), [_owner_policy("left_id")])
+        with self.assertRaisesRegex(ValueError, r"reads \['account_id'\]"):
+            register.base_wrapper(Base, context_model=Other)
 
 
 class TestRelationshipPolicyContextValidation(unittest.TestCase):
@@ -1414,26 +1466,23 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
         with self.engine.connect() as connection:
             self.assertEqual(self._upgrade_ops(connection, metadata), [])
 
-    def test_policies_are_created_after_all_tables(self) -> None:
+    def test_policies_are_created_after_all_other_changes(self) -> None:
         with self.engine.connect() as connection:
             ops = self._upgrade_ops(connection)
-        last_create = max(
-            i
-            for i, op in enumerate(ops)
-            if isinstance(op, alembic_ops_module.CreateTableOp)
-        )
-        for i, op in enumerate(ops):
-            if isinstance(op, alembic_ops_module.ModifyTableOps) and any(
+
+        def creates_policies(op: typing.Any) -> bool:
+            return isinstance(op, alembic_ops_module.ModifyTableOps) and any(
                 isinstance(sub_op, alembic_ops.CreatePolicyOp) for sub_op in op.ops
-            ):
-                with self.subTest(op.table_name):
-                    self.assertGreater(i, last_create)
-                    self.assertTrue(
-                        all(
-                            isinstance(sub_op, alembic_ops.CreatePolicyOp)
-                            for sub_op in op.ops
-                        )
-                    )
+            )
+
+        first = next(i for i, op in enumerate(ops) if creates_policies(op))
+        self.assertGreater(first, 0)
+        for op in ops[first:]:
+            self.assertTrue(creates_policies(op))
+            self.assertTrue(
+                all(isinstance(sub_op, alembic_ops.CreatePolicyOp) for sub_op in op.ops)
+            )
+        self.assertFalse(any(creates_policies(op) for op in ops[:first]))
 
     def test_upgrade_from_empty_database(self) -> None:
         self._upgrade(Base.metadata)
@@ -1462,6 +1511,40 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
 
         self.assertIn(Book.__tablename__, IndexBase.metadata.tables)
         self._upgrade(IndexBase.metadata)
+
+    def test_policies_are_created_after_existing_tables_are_altered(self) -> None:
+        """Alembic alters existing tables after creating new ones, so a new
+        table's policy reading a new column of an existing table must wait."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                sqlalchemy.text("CREATE TABLE authors (id INTEGER PRIMARY KEY)")
+            )
+        AlterBase: typing.Any = _new_base()
+
+        class Author(AlterBase):
+            __tablename__ = "authors"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            enabled = sqlalchemy.Column(sqlalchemy.Boolean)
+            __rls_policies__ = _owner_policies()
+
+        class Book(AlterBase):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            author_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("authors.id")
+            )
+            author = orm.relationship(
+                Author,
+                primaryjoin=lambda: sqlalchemy.and_(
+                    Book.author_id == Author.id, Author.enabled == sql.true()
+                ),
+            )
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("author")
+            ]
+
+        self.assertIn(Book.__tablename__, AlterBase.metadata.tables)
+        self._upgrade(AlterBase.metadata)
 
 
 if __name__ == "__main__":
