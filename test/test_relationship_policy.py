@@ -889,7 +889,8 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
 
 
 _TAG_VISIBLE = "(EXISTS (SELECT 1 FROM tags WHERE tags.id = book_tags.tag_id))"
-_BOTH_VISIBLE = "rls_visible_books_id(book_tags.book_id) AND " + _TAG_VISIBLE
+_BOOKS_VISIBLE = policy.RowVisibleFunction("books", "id", "INTEGER").name
+_BOTH_VISIBLE = f"{_BOOKS_VISIBLE}(book_tags.book_id) AND " + _TAG_VISIBLE
 
 
 class TestLinkPolicies(unittest.TestCase):
@@ -954,15 +955,43 @@ class TestLinkPolicies(unittest.TestCase):
         insert = typing.cast(
             policy.Policy, policy.resolved_policies(Base.metadata)["lib.book_tags"][1]
         )
-        self.assertIn("lib.rls_visible_books_id(lib.book_tags.book_id)", insert.expr)
+        self.assertIn(f"lib.{_BOOKS_VISIBLE}(lib.book_tags.book_id)", insert.expr)
         (function,) = policy.row_visible_functions(Base.metadata)
-        self.assertEqual(function.signature, "lib.rls_visible_books_id(INTEGER)")
-        self.assertIn("FROM lib.books WHERE lib.books.id = $1", function.body)
+        self.assertEqual(function.signature, f"lib.{_BOOKS_VISIBLE}(INTEGER)")
+        self.assertIn(
+            "FROM lib.books WHERE lib.books.id = $1",
+            function.body("lib"),
+        )
+
+    def test_mixed_case_schema_is_quoted(self) -> None:
+        Base = _library(
+            [policy.Policy.from_relationship("tags", link_policies=True)],
+            link_policies=[],
+            schema="MixedSchema",
+        )
+        insert = typing.cast(
+            policy.Policy,
+            policy.resolved_policies(Base.metadata)["MixedSchema.book_tags"][1],
+        )
+        self.assertIn(f'"MixedSchema".{_BOOKS_VISIBLE}(', insert.expr)
+
+    def test_resolving_again_after_registering_again(self) -> None:
+        Base = _library(
+            [policy.Policy.from_relationship("tags", link_policies=True)],
+            link_policies=[],
+        )
+        first = policy.resolved_policies(Base.metadata)["book_tags"]
+        register.base_wrapper(Base)
+        self.assertEqual(
+            [p.name for p in policy.resolved_policies(Base.metadata)["book_tags"]],
+            [p.name for p in first],
+        )
 
     def test_function_names(self) -> None:
-        self.assertEqual(
-            policy.RowVisibleFunction("books", "id", "INTEGER").name,
-            "rls_visible_books_id",
+        self.assertTrue(
+            policy.RowVisibleFunction("books", "id", "INTEGER").name.startswith(
+                "rls_visible_books_id_"
+            )
         )
         # Lowercase (SQLAlchemy does not quote function names) and at most
         # 63 bytes, with a hash to keep them distinct.
@@ -979,10 +1008,16 @@ class TestLinkPolicies(unittest.TestCase):
             policy.RowVisibleFunction("b" * 70, "id", "INTEGER").name,
             policy.RowVisibleFunction("b" * 70, "id2", "INTEGER").name,
         )
+        self.assertNotEqual(
+            policy.RowVisibleFunction("accounts_users", "id", "INTEGER").name,
+            policy.RowVisibleFunction("accounts", "users_id", "INTEGER").name,
+        )
 
     def test_function_marker_round_trips(self) -> None:
         function = policy.RowVisibleFunction("books", "id", "UUID", schemaname="lib")
-        self.assertEqual(policy.RowVisibleFunction.from_body(function.body), function)
+        self.assertEqual(
+            policy.RowVisibleFunction.from_body(function.body('"lib"')), function
+        )
         self.assertIsNone(policy.RowVisibleFunction.from_body("BEGIN RETURN true; END"))
 
     def test_added_to_declared_table_policies(self) -> None:
@@ -1355,6 +1390,7 @@ register.table_policies(
 )
 
 _ROLE = "relationship_user"
+_PROJECTS_VISIBLE = policy.RowVisibleFunction("projects", "id", "INTEGER").name
 _RELATIONSHIP_TABLES = (
     "books",
     "chapters",
@@ -1842,7 +1878,7 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
         with self.engine.begin() as connection:
             connection.execute(
                 sqlalchemy.text(
-                    "CREATE OR REPLACE FUNCTION rls_visible_projects_id(integer) "
+                    f"CREATE OR REPLACE FUNCTION {_PROJECTS_VISIBLE}(integer) "
                     "RETURNS boolean LANGUAGE plpgsql STABLE AS "
                     "$$ BEGIN RETURN true; END $$"
                 )
@@ -1962,6 +1998,143 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
     def test_policies_are_dropped_before_tables_they_read(self) -> None:
         self._upgrade(self._books_with_tags(with_tags=True).metadata)
         self._upgrade(self._books_with_tags(with_tags=False).metadata)
+
+    def test_whole_relationship_graph_is_removed(self) -> None:
+        self._upgrade(self._books_with_tags(with_tags=True).metadata)
+        empty = _new_base().metadata
+        with self.engine.connect() as connection:
+            ops = self._upgrade_ops(connection, empty)
+        # The books' policy reads book_tags, so it is dropped explicitly
+        # before any table.
+        first_table_drop = next(
+            i
+            for i, op in enumerate(ops)
+            if isinstance(op, alembic_ops_module.DropTableOp)
+        )
+        policy_drops = [
+            (i, op.table_name)
+            for i, op in enumerate(ops)
+            if isinstance(op, alembic_ops_module.ModifyTableOps)
+            and any(isinstance(sub, alembic_ops.DropPolicyOp) for sub in op.ops)
+        ]
+        self.assertIn("books", [table for _, table in policy_drops])
+        self.assertTrue(all(i < first_table_drop for i, _ in policy_drops))
+        # Alembic drops removed tables in no particular order, ignoring their
+        # foreign keys, so drop the association table first.
+        ops.sort(
+            key=lambda op: (
+                isinstance(op, alembic_ops_module.DropTableOp)
+                and op.table_name != "book_tags"
+            )
+        )
+        with self.engine.begin() as connection:
+            operations = alembic_operations.Operations(
+                migration.MigrationContext.configure(connection)
+            )
+            for op in ops:
+                for sub in (
+                    op.ops
+                    if isinstance(op, alembic_ops_module.ModifyTableOps)
+                    else [op]
+                ):
+                    operations.invoke(sub)
+        with self.engine.connect() as connection:
+            self.assertEqual(self._upgrade_ops(connection, empty), [])
+
+    def test_helper_function_with_enum_key(self) -> None:
+        EnumBase: typing.Any = _new_base()
+        kind = sqlalchemy.Enum("novel", "poem", name="book_kind")
+        book_tags = sqlalchemy.Table(
+            "book_tags",
+            EnumBase.metadata,
+            sqlalchemy.Column("book_id", kind, sqlalchemy.ForeignKey("books.id")),
+            sqlalchemy.Column("tag_id", sqlalchemy.ForeignKey("tags.id")),
+        )
+
+        class Tag(EnumBase):
+            __tablename__ = "tags"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _owner_policies()
+
+        class Book(EnumBase):
+            __tablename__ = "books"
+            id: sqlalchemy.Column[str] = sqlalchemy.Column(kind, primary_key=True)
+            tags = orm.relationship(Tag, secondary=book_tags)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("tags", link_policies=True)
+            ]
+
+        EnumBase.models = [Tag, Book]
+        self._upgrade(EnumBase.metadata)
+
+    def test_helper_function_ignores_temporary_tables(self) -> None:
+        self._upgrade(Base.metadata)
+        with self.engine.begin() as connection:
+            connection.execute(
+                sqlalchemy.text(
+                    "CREATE TEMPORARY TABLE projects (id integer); "
+                    "INSERT INTO projects VALUES (999)"
+                )
+            )
+            self.assertFalse(
+                connection.execute(
+                    sqlalchemy.text(f"SELECT {_PROJECTS_VISIBLE}(999)")
+                ).scalar_one()
+            )
+
+    def test_helper_function_ops_escape_colons(self) -> None:
+        with self.engine.begin() as connection:
+            operations = alembic_operations.Operations(
+                migration.MigrationContext.configure(connection)
+            )
+            op = alembic_ops.CreateRowVisibleFunctionOp("b :c", "id", "INTEGER")
+            operations.invoke(op)
+            operations.invoke(op.reverse())
+
+    def _stale_function_ops(self, include_name: typing.Any) -> list:
+        with self.engine.connect() as connection:
+            context = migration.MigrationContext.configure(
+                connection,
+                opts={"target_metadata": Base.metadata, "include_name": include_name},
+            )
+            script = autogenerate.produce_migrations(context, Base.metadata)
+        assert script.upgrade_ops is not None
+        return [
+            op
+            for op in script.upgrade_ops.ops
+            if isinstance(op, alembic_ops.DropRowVisibleFunctionOp)
+        ]
+
+    def test_stale_function_respects_name_filters(self) -> None:
+        self._upgrade(Base.metadata)
+        stale = policy.RowVisibleFunction("authors", "id", "INTEGER")
+        with self.engine.begin() as connection:
+            connection.execute(sqlalchemy.text(stale.create_sql))
+
+        def exclude_authors(name: str, type_: str, parent_names: typing.Any) -> bool:
+            return not (type_ == "table" and name == "authors")
+
+        self.assertEqual(self._stale_function_ops(exclude_authors), [])
+        (drop,) = self._stale_function_ops(lambda *_: True)
+        self.assertEqual(drop.to_function(), stale)
+
+    def test_function_used_by_another_base_is_kept(self) -> None:
+        self._upgrade(Base.metadata)
+        stale = policy.RowVisibleFunction("authors", "id", "INTEGER")
+        with self.engine.begin() as connection:
+            connection.execute(sqlalchemy.text(stale.create_sql))
+            connection.execute(
+                sqlalchemy.text(
+                    "CREATE TABLE other (author_id integer); "
+                    "ALTER TABLE other ENABLE ROW LEVEL SECURITY; "
+                    f"CREATE POLICY p ON other USING ({stale.name}(author_id))"
+                )
+            )
+
+        def exclude_other(name: str, type_: str, parent_names: typing.Any) -> bool:
+            return not (type_ == "table" and name == "other")
+
+        self.assertEqual(self._stale_function_ops(exclude_other), [])
 
 
 if __name__ == "__main__":

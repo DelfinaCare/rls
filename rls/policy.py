@@ -117,14 +117,14 @@ class RowVisibleFunction:
 
     @property
     def name(self) -> str:
-        name = f"{_ROW_VISIBLE_FUNCTION_PREFIX}{self.table_name}_{self.column_name}"
-        # SQLAlchemy does not quote function names with uppercase letters, so
-        # the name is lowercase, with a hash to keep it unique if needed.
-        if name == name.lower() and len(name.encode()) <= _MAX_IDENTIFIER_BYTES:
-            return name
+        # The hash keeps names of different table and column pairs distinct
+        # (``a_b.c`` and ``a.b_c`` would otherwise collide).  SQLAlchemy does
+        # not quote function names with uppercase letters, so names are
+        # lowercase.
         digest = hashlib.sha256(
-            f"{self.table_name}.{self.column_name}".encode()
+            json.dumps([self.table_name, self.column_name]).encode()
         ).hexdigest()[:_POLICY_HASH_LENGTH]
+        name = f"{_ROW_VISIBLE_FUNCTION_PREFIX}{self.table_name}_{self.column_name}"
         keep = _MAX_IDENTIFIER_BYTES - _POLICY_HASH_LENGTH - 1
         prefix = name.lower().encode()[:keep].decode(errors="ignore")
         return f"{prefix}_{digest}"
@@ -140,8 +140,13 @@ class RowVisibleFunction:
     def signature(self) -> str:
         return f"{self.qualified_name}({self.key_type})"
 
-    @property
-    def body(self) -> str:
+    def body(self, quoted_schema: str) -> str:
+        """The function's body, reading the table in ``quoted_schema``.
+
+        The table is always schema-qualified: a function looks tables up on
+        the caller's ``search_path`` when it runs, so an unqualified name
+        could find a temporary table the caller created.
+        """
         marker = json.dumps(
             {
                 "schema": self.schemaname,
@@ -151,7 +156,7 @@ class RowVisibleFunction:
             },
             sort_keys=True,
         )
-        table = quote_table(self.table_name, self.schemaname)
+        table = f"{quoted_schema}.{quote_identifier(self.table_name)}"
         return (
             f"\n{ROW_VISIBLE_FUNCTION_MARKER}{marker}\nBEGIN\n"
             f"    RETURN EXISTS (SELECT 1 FROM {table} "
@@ -159,10 +164,41 @@ class RowVisibleFunction:
         )
 
     @property
+    def quoted_schema(self) -> str | None:
+        if self.schemaname is None:
+            return None
+        return _IDENTIFIER_PREPARER.quote_schema(self.schemaname)
+
+    @property
     def create_sql(self) -> str:
+        """The statement that creates (or replaces) the function.
+
+        A function for a table without a schema is created in, and reads
+        the table from, the ``current_schema()`` of the connection that runs
+        the statement, just as the policies' table names are resolved when
+        they are created.
+        """
+        definition = (
+            "CREATE OR REPLACE FUNCTION {name}({key_type}) RETURNS boolean "
+            "LANGUAGE plpgsql STABLE AS $rls${body}$rls$"
+        )
+        if self.quoted_schema is not None:
+            return definition.format(
+                name=self.qualified_name,
+                key_type=self.key_type,
+                body=self.body(self.quoted_schema),
+            )
+        sentinel = "\x00schema\x00"
+        template = definition.format(
+            name=f"{sentinel}.{quote_identifier(self.name)}",
+            key_type=self.key_type,
+            body=self.body(sentinel),
+        )
+        template = template.replace("%", "%%").replace(sentinel, "%1$I")
         return (
-            f"CREATE OR REPLACE FUNCTION {self.signature} RETURNS boolean "
-            f"LANGUAGE plpgsql STABLE AS $rls${self.body}$rls$"
+            "DO $rls_create$\nBEGIN\n    EXECUTE format("
+            f"$rls_template${template}$rls_template$, current_schema());\n"
+            "END\n$rls_create$"
         )
 
     @property
@@ -188,12 +224,16 @@ class RowVisibleFunction:
 
 
 _ROW_VISIBLE_FUNCTIONS_KEY = "rls_row_visible_functions"
+_GENERATED_LINK_POLICIES_KEY = "rls_generated_link_policies"
 
 
 def row_visible_functions(metadata: sqlalchemy.MetaData) -> list[RowVisibleFunction]:
     """The helper functions the policies registered on ``metadata`` call."""
     resolved_policies(metadata)
-    return list(metadata.info.get(_ROW_VISIBLE_FUNCTIONS_KEY, {}).values())
+    functions: dict[str, RowVisibleFunction] = {}
+    for by_name in metadata.info.get(_ROW_VISIBLE_FUNCTIONS_KEY, {}).values():
+        functions.update(by_name)
+    return list(functions.values())
 
 
 class ConditionArg(pydantic.BaseModel):
@@ -929,10 +969,13 @@ class RelationshipPolicy(pydantic.BaseModel):
         )
 
         def both_visible() -> elements.ColumnElement:
-            source_visible: elements.ColumnElement = sql.functions.Function(
-                function.name,
-                _policy_table_column(typing.cast(sqlalchemy.Column, link_source)),
-                packagenames=(function.schemaname,) if function.schemaname else (),
+            # The function's name is rendered as created, since SQLAlchemy
+            # would not quote a mixed-case schema name.
+            link_column_sql = _policy_table_column(
+                typing.cast(sqlalchemy.Column, link_source)
+            ).compile(dialect=_POSTGRES_DIALECT)
+            source_visible = sql.literal_column(
+                f"{function.qualified_name}({link_column_sql})",
                 type_=sqlalchemy.Boolean,
             )
             return sql.and_(source_visible, target_visible())
@@ -1029,47 +1072,101 @@ def resolved_policies(
         for registry in {mapper.registry for mapper in pending.values()}:
             registry.configure(cascade=True)
         # Generate the policies of association tables first, so that the
-        # relationship policies find them.
-        link_policies: dict[str, list[Policy]] = {}
-        link_reads: dict[str, set[str]] = {}
-        functions: dict[str, RowVisibleFunction] = metadata.info.setdefault(
-            _ROW_VISIBLE_FUNCTIONS_KEY, {}
+        # relationship policies find them.  They are kept apart from the
+        # declared policies, so that resolving again (e.g. after the base is
+        # registered again) replaces them instead of adding them twice.
+        generated_by: dict[str, dict[str, list[Policy]]] = metadata.info.setdefault(
+            _GENERATED_LINK_POLICIES_KEY, {}
         )
+        new_generated: dict[str, dict[str, list[Policy]]] = {}
+        link_reads: dict[str, set[str]] = {}
+        new_functions: dict[str, dict[str, RowVisibleFunction]] = {}
         for table_name, mapper in pending.items():
             for p in policies[table_name]:
                 if isinstance(p, RelationshipPolicy) and p.link_policies:
                     link_table, generated, reads, function = p.link_table_policies(
                         mapper
                     )
-                    link_policies.setdefault(link_table, []).extend(generated)
+                    new_generated.setdefault(table_name, {}).setdefault(
+                        link_table, []
+                    ).extend(generated)
                     link_reads.setdefault(link_table, set()).update(reads)
-                    functions.setdefault(function.qualified_name, function)
-        modes = metadata.info.setdefault("rls_modes", {})
-        for link_table, generated in link_policies.items():
-            combined = [*policies.get(link_table, []), *generated]
+                    new_functions.setdefault(table_name, {})[
+                        function.qualified_name
+                    ] = function
+        # The association tables' policies without the ones previously
+        # generated for the tables being resolved, plus the new ones.
+        link_tables = {
+            link_table
+            for table_name in pending
+            for by_table in (
+                generated_by.get(table_name, {}),
+                new_generated.get(table_name, {}),
+            )
+            for link_table in by_table
+        }
+        link_table_policies: dict[str, list[Policy | ExternalPolicy]] = {}
+        for link_table in link_tables:
+            stale = {
+                id(p)
+                for table_name in pending
+                for p in generated_by.get(table_name, {}).get(link_table, [])
+            }
+            combined = [p for p in policies.get(link_table, []) if id(p) not in stale]
+            for by_table in new_generated.values():
+                combined.extend(by_table.get(link_table, []))
             check_unique_policy_names(link_table, combined)
-            policies[link_table] = combined
-            modes.setdefault(link_table, DEFAULT_RLS_MODE)
-        _check_no_recursion(
-            {
+            link_table_policies[link_table] = combined
+        # The relationship policies check that the association tables have
+        # policies, so the new ones are put in place while they resolve, and
+        # the previous ones restored if anything fails.
+        missing = object()
+        previous = {
+            link_table: policies.get(link_table, missing)
+            for link_table in link_table_policies
+        }
+        policies.update(link_table_policies)
+        try:
+            _check_no_recursion(
+                {
+                    table_name: [
+                        (p, mapper)
+                        for p in policies[table_name]
+                        if isinstance(p, RelationshipPolicy)
+                    ]
+                    for table_name, mapper in pending.items()
+                },
+                link_reads,
+            )
+            resolved = {
                 table_name: [
-                    (p, mapper)
+                    p.resolve(mapper) if isinstance(p, RelationshipPolicy) else p
                     for p in policies[table_name]
-                    if isinstance(p, RelationshipPolicy)
                 ]
                 for table_name, mapper in pending.items()
-            },
-            link_reads,
-        )
-        resolved = {
-            table_name: [
-                p.resolve(mapper) if isinstance(p, RelationshipPolicy) else p
-                for p in policies[table_name]
-            ]
-            for table_name, mapper in pending.items()
-        }
-        for table_name, table_policies in resolved.items():
-            check_unique_policy_names(table_name, table_policies)
+            }
+            for table_name, table_policies in resolved.items():
+                check_unique_policy_names(table_name, table_policies)
+        except Exception:
+            for link_table, old in previous.items():
+                if old is missing:
+                    policies.pop(link_table, None)
+                else:
+                    policies[link_table] = old
+            raise
+        # Everything is valid: store the result.
+        modes = metadata.info.setdefault("rls_modes", {})
+        for link_table, combined in link_table_policies.items():
+            if combined:
+                modes.setdefault(link_table, DEFAULT_RLS_MODE)
+            else:
+                policies.pop(link_table, None)
+        functions_by = metadata.info.setdefault(_ROW_VISIBLE_FUNCTIONS_KEY, {})
+        for table_name in pending:
+            generated_by.pop(table_name, None)
+            functions_by.pop(table_name, None)
+        generated_by.update(new_generated)
+        functions_by.update(new_functions)
         policies.update(resolved)
         pending.clear()
     return policies
