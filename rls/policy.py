@@ -600,6 +600,19 @@ class RelationshipPolicy(pydantic.BaseModel):
 
         # Accessible when related to the row whose primary key is the
         # context value.
+        if target_mapper.inherits is not None:
+            # The comparison only reads the foreign key, so it would not
+            # check that the related row is of the subclass, i.e. that it
+            # has a row in the subclass's table.
+            raise self._error(
+                mapper,
+                f"condition_arg is compared with the related row's primary "
+                f"key, but {target_mapper.class_.__name__} inherits from "
+                f"{target_mapper.inherits.class_.__name__}, and the "
+                "comparison cannot check that the related row is a "
+                f"{target_mapper.class_.__name__}. Omit condition_arg or use "
+                "Policy.from_sqla instead.",
+            )
         primary_key = prop.mapper.primary_key
         if len(primary_key) != 1:
             raise self._error(

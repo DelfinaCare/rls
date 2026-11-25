@@ -232,7 +232,7 @@ register.table_policies(
 
 Having policies on the association table is necessary, not sufficient: what they allow is up to you. Be careful with write policies that only look at one side of the link, such as "a session may insert links to tags it can see" or "a session may add itself as a member", since they let a session link itself to any row whose id it knows. Because RLS is forced by default and `bypass_rls()` works by being part of each policy's expression, a command with no policy at all is denied even with `bypass_rls()`, which is why the example declares bypass-only write policies rather than none.
 
-**A new row has no links yet.** With a many-to-many or one-to-many relationship policy, a newly inserted row cannot pass the policy's `INSERT` check, so it can only be inserted with `bypass_rls()`. To let ordinary sessions create rows, add an `INSERT` policy saying who may (policies of the same type are combined with `OR`):
+**A new row has no links yet.** With a many-to-many or one-to-many relationship policy, a newly inserted row cannot pass the policy's `INSERT` check, so it can only be inserted with `bypass_rls()`. To let ordinary sessions create rows, add an `INSERT` policy saying who may (permissive policies are combined with `OR`):
 
 ```python
 __rls_policies__ = [
@@ -240,6 +240,8 @@ __rls_policies__ = [
     Policy.from_sqla(expr=lambda: true(), condition_args=[], cmd=Command.insert),
 ]
 ```
+
+This only works when the relationship policy is permissive (the default). Restrictive policies are combined with `AND`, so a restrictive relationship policy that applies to `INSERT` (e.g. with the default `Command.all`) still rejects every unlinked row, whatever other `INSERT` policies allow; limit it to the other commands with `cmd` if new rows should be allowed.
 
 The new row stays inaccessible to its creator until it is linked, and Postgres applies the `SELECT` policies to `INSERT ... RETURNING`, so such inserts cannot return the row (e.g. a server-generated primary key). Creating the row and its first links inside `bypass_rls()`, or adding a policy on a column of the row itself (such as a `created_by` column), avoids both.
 

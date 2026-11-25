@@ -121,7 +121,9 @@ def _library(
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
         __rls_policies__ = _owner_policies() if tag_policies is None else tag_policies
 
-    del Book, Author, Tag
+    # The class registry only holds weak references, and Book refers to the
+    # other models by name, so they are kept alive until resolved.
+    Base.models = (Book, Author, Tag)
     return Base
 
 
@@ -769,6 +771,82 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
         self.assertEqual(len(models), 2 * layers)
         self.assertEqual(len(_exprs(Base, "a0")), 2)
 
+    def test_joined_table_inheritance_target(self) -> None:
+        """Without condition_arg the subclass's table is part of the EXISTS;
+        with it, only the foreign key would be compared, which cannot check
+        that the related row is of the subclass."""
+        Base: typing.Any = _new_base()
+
+        class Person(Base):
+            __tablename__ = "people"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            __rls_policies__ = _owner_policies()
+
+        class Admin(Person):
+            __tablename__ = "admins"
+            id = sqlalchemy.Column(
+                sqlalchemy.Integer,
+                sqlalchemy.ForeignKey("people.id"),
+                primary_key=True,
+            )
+
+        class Ticket(Base):
+            __tablename__ = "tickets"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            admin_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("people.id")
+            )
+            admin = orm.relationship(Admin)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("admin", allow_bypass_rls=False)
+            ]
+
+        self.assertIn(Admin.__tablename__, Base.metadata.tables)
+        self.assertEqual(
+            _exprs(Base, "tickets"),
+            [
+                (
+                    "EXISTS (SELECT 1 FROM people JOIN admins ON people.id = "
+                    "admins.id WHERE people.id = tickets.admin_id)"
+                )
+            ],
+        )
+
+    def test_joined_table_inheritance_target_with_condition_arg_raises(
+        self,
+    ) -> None:
+        Base: typing.Any = _new_base()
+
+        class Person(Base):
+            __tablename__ = "people"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+
+        class Admin(Person):
+            __tablename__ = "admins"
+            id = sqlalchemy.Column(
+                sqlalchemy.Integer,
+                sqlalchemy.ForeignKey("people.id"),
+                primary_key=True,
+            )
+
+        class Ticket(Base):
+            __tablename__ = "tickets"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            admin_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("people.id")
+            )
+            admin = orm.relationship(Admin)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("admin", condition_arg=_ACCOUNT_ID)
+            ]
+
+        self.assertIn(Admin.__tablename__, Base.metadata.tables)
+        self.assertIn(Ticket.__tablename__, Base.metadata.tables)
+        with self.assertRaisesRegex(
+            ValueError, r"Ticket\.admin: .*Admin inherits from Person"
+        ):
+            policy.resolved_policies(Base.metadata)
+
 
 class _Context(pydantic.BaseModel):
     account_id: int | None = None
@@ -1307,30 +1385,19 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
         self.engine = sqlalchemy.create_engine(url)
         self.addCleanup(self.engine.dispose)
 
-    def _upgrade_ops(self, connection: sqlalchemy.Connection) -> list:
+    def _upgrade_ops(
+        self,
+        connection: sqlalchemy.Connection,
+        metadata: sqlalchemy.MetaData = Base.metadata,
+    ) -> list:
         context = migration.MigrationContext.configure(
-            connection, opts={"target_metadata": Base.metadata}
+            connection, opts={"target_metadata": metadata}
         )
-        script = autogenerate.produce_migrations(context, Base.metadata)
+        script = autogenerate.produce_migrations(context, metadata)
         assert script.upgrade_ops is not None
         return list(script.upgrade_ops.ops)
 
-    def test_policies_are_created_after_all_tables(self) -> None:
-        with self.engine.connect() as connection:
-            ops = self._upgrade_ops(connection)
-        kinds = [
-            "create_table"
-            if isinstance(op, alembic_ops_module.CreateTableOp)
-            else "policies"
-            for op in ops
-        ]
-        self.assertEqual(
-            kinds,
-            ["create_table"] * len(Base.metadata.tables)
-            + ["policies"] * (len(kinds) - len(Base.metadata.tables)),
-        )
-
-    def test_upgrade_from_empty_database(self) -> None:
+    def _upgrade(self, metadata: sqlalchemy.MetaData) -> None:
         with self.engine.begin() as connection:
             operations = alembic_operations.Operations(
                 migration.MigrationContext.configure(connection)
@@ -1343,9 +1410,58 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
                     else:
                         operations.invoke(op)
 
-            invoke(self._upgrade_ops(connection))
+            invoke(self._upgrade_ops(connection, metadata))
         with self.engine.connect() as connection:
-            self.assertEqual(self._upgrade_ops(connection), [])
+            self.assertEqual(self._upgrade_ops(connection, metadata), [])
+
+    def test_policies_are_created_after_all_tables(self) -> None:
+        with self.engine.connect() as connection:
+            ops = self._upgrade_ops(connection)
+        last_create = max(
+            i
+            for i, op in enumerate(ops)
+            if isinstance(op, alembic_ops_module.CreateTableOp)
+        )
+        for i, op in enumerate(ops):
+            if isinstance(op, alembic_ops_module.ModifyTableOps) and any(
+                isinstance(sub_op, alembic_ops.CreatePolicyOp) for sub_op in op.ops
+            ):
+                with self.subTest(op.table_name):
+                    self.assertGreater(i, last_create)
+                    self.assertTrue(
+                        all(
+                            isinstance(sub_op, alembic_ops.CreatePolicyOp)
+                            for sub_op in op.ops
+                        )
+                    )
+
+    def test_upgrade_from_empty_database(self) -> None:
+        self._upgrade(Base.metadata)
+
+    def test_indexes_of_new_tables_are_not_deferred(self) -> None:
+        """A foreign key to a uniquely indexed column needs the index, which
+        Alembic creates right after its table."""
+        IndexBase: typing.Any = _new_base()
+
+        class Author(IndexBase):
+            __tablename__ = "authors"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            code = sqlalchemy.Column(sqlalchemy.String, unique=True, index=True)
+            __rls_policies__ = _owner_policies()
+
+        class Book(IndexBase):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            author_code = sqlalchemy.Column(
+                sqlalchemy.String, sqlalchemy.ForeignKey("authors.code")
+            )
+            author = orm.relationship(Author)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("author")
+            ]
+
+        self.assertIn(Book.__tablename__, IndexBase.metadata.tables)
+        self._upgrade(IndexBase.metadata)
 
 
 if __name__ == "__main__":

@@ -439,30 +439,43 @@ def defer_policies_of_new_tables(
     Alembic emits the operations of a new table right after creating it,
     but a policy may read other tables (e.g. one derived from a
     relationship reads the related or association table), which may be
-    created later in the same migration.  The operations of new tables
-    that create policies are therefore moved after the last table creation.
+    created later in the same migration.  The policy creations of new tables
+    are therefore moved after the last table creation.  Their other
+    operations (e.g. creating indexes that later foreign keys rely on) stay
+    where they are.
     """
     if alembic_generation_suppressed():
         return
     top_level = upgrade_ops.ops
-    created = [
+    new_tables = {
         (op.schema, op.table_name)
         for op in top_level
         if isinstance(op, migrate_ops.CreateTableOp)
-    ]
-    if not created:
+    }
+    if not new_tables:
         return
-    new_tables = set(created)
-    deferred = [
-        op
-        for op in top_level
-        if isinstance(op, migrate_ops.ModifyTableOps)
-        and (op.schema, op.table_name) in new_tables
-        and any(isinstance(sub_op, CreatePolicyOp) for sub_op in op.ops)
-    ]
+    deferred: list[migrate_ops.MigrateOperation] = []
+    for op in top_level:
+        if not (
+            isinstance(op, migrate_ops.ModifyTableOps)
+            and (op.schema, op.table_name) in new_tables
+        ):
+            continue
+        creates = [sub_op for sub_op in op.ops if isinstance(sub_op, CreatePolicyOp)]
+        if creates:
+            op.ops = [
+                sub_op for sub_op in op.ops if not isinstance(sub_op, CreatePolicyOp)
+            ]
+            deferred.append(
+                migrate_ops.ModifyTableOps(op.table_name, creates, schema=op.schema)
+            )
     if not deferred:
         return
-    remaining = [op for op in top_level if not any(op is d for d in deferred)]
+    remaining = [
+        op
+        for op in top_level
+        if not (isinstance(op, migrate_ops.ModifyTableOps) and not op.ops)
+    ]
     last_create = max(
         i for i, op in enumerate(remaining) if isinstance(op, migrate_ops.CreateTableOp)
     )
