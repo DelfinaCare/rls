@@ -73,6 +73,63 @@ class DisableRlsOp(alembic_operations.MigrateOperation):
         return EnableRlsOp(self.tablename, schemaname=self.schemaname)
 
 
+@alembic_operations.Operations.register_operation("create_rls_row_visible_function")
+class CreateRowVisibleFunctionOp(alembic_operations.MigrateOperation):
+    """Create (or replace) the ``rls_row_visible`` helper function used by
+    the generated policies of association tables.
+
+    ``replaces`` records whether the function already existed, so that the
+    reverse operation only drops a function this one created.
+    """
+
+    def __init__(self, replaces: bool = False) -> None:
+        self.replaces = replaces
+
+    @classmethod
+    def create_rls_row_visible_function(
+        cls, operations: alembic_operations.Operations, **kw: typing.Any
+    ) -> None:
+        operations.invoke(CreateRowVisibleFunctionOp(**kw))
+
+    def reverse(self) -> "CreateRowVisibleFunctionOp | DropRowVisibleFunctionOp":
+        # A replaced function is left in place: other policies may use it.
+        if self.replaces:
+            return CreateRowVisibleFunctionOp(replaces=True)
+        return DropRowVisibleFunctionOp()
+
+
+@alembic_operations.Operations.register_operation("drop_rls_row_visible_function")
+class DropRowVisibleFunctionOp(alembic_operations.MigrateOperation):
+    """Drop the ``rls_row_visible`` helper function."""
+
+    @classmethod
+    def drop_rls_row_visible_function(
+        cls, operations: alembic_operations.Operations
+    ) -> None:
+        operations.invoke(DropRowVisibleFunctionOp())
+
+    def reverse(self) -> CreateRowVisibleFunctionOp:
+        return CreateRowVisibleFunctionOp()
+
+
+@alembic_operations.Operations.implementation_for(CreateRowVisibleFunctionOp)
+def create_rls_row_visible_function(
+    operations: alembic_operations.Operations,
+    operation: CreateRowVisibleFunctionOp,
+) -> None:
+    operations.execute(policy.ROW_VISIBLE_FUNCTION_SQL)
+
+
+@alembic_operations.Operations.implementation_for(DropRowVisibleFunctionOp)
+def drop_rls_row_visible_function(
+    operations: alembic_operations.Operations,
+    operation: DropRowVisibleFunctionOp,
+) -> None:
+    operations.execute(
+        f"DROP FUNCTION IF EXISTS {policy.ROW_VISIBLE_FUNCTION_SIGNATURE}"
+    )
+
+
 def _qualified_name(tablename: str, schemaname: str | None) -> str:
     return f"{schemaname}.{tablename}" if schemaname is not None else tablename
 
@@ -128,6 +185,10 @@ class RLSOp(typing.Protocol):
     ) -> None: ...
 
     def disable_rls(self, tablename: str, **kw: typing.Any) -> None: ...
+
+    def create_rls_row_visible_function(self, **kw: typing.Any) -> None: ...
+
+    def drop_rls_row_visible_function(self) -> None: ...
 
     def create_policy(
         self,
@@ -187,6 +248,24 @@ def render_disable_rls(
         f"typing.cast(alembic_ops.RLSOp, op).disable_rls({op.tablename!r}"
         f"{_render_schemaname(op.schemaname)})"
     )
+
+
+@autogenerate.renderers.dispatch_for(CreateRowVisibleFunctionOp)
+def render_create_rls_row_visible_function(
+    autogen_context: autogenerate_api.AutogenContext,
+    op: CreateRowVisibleFunctionOp,
+) -> str:
+    _add_rls_imports(autogen_context)
+    return "typing.cast(alembic_ops.RLSOp, op).create_rls_row_visible_function()"
+
+
+@autogenerate.renderers.dispatch_for(DropRowVisibleFunctionOp)
+def render_drop_rls_row_visible_function(
+    autogen_context: autogenerate_api.AutogenContext,
+    op: DropRowVisibleFunctionOp,
+) -> str:
+    _add_rls_imports(autogen_context)
+    return "typing.cast(alembic_ops.RLSOp, op).drop_rls_row_visible_function()"
 
 
 def _schema_expr(schemaname: str | None) -> typing.Any:
@@ -428,6 +507,42 @@ def _register_late_schema_comparator(
     )(fn)
 
 
+def _metadatas(
+    autogen_context: autogenerate_api.AutogenContext,
+) -> list[sa.MetaData]:
+    metadata = autogen_context.metadata
+    if metadata is None:
+        return []
+    if isinstance(metadata, sa.MetaData):
+        return [metadata]
+    return list(metadata)
+
+
+def _row_visible_function_op(
+    autogen_context: autogenerate_api.AutogenContext,
+) -> CreateRowVisibleFunctionOp | None:
+    """Return the operation that creates or updates the ``rls_row_visible``
+    helper function, if a policy in the metadata calls it and the database
+    lacks the current version."""
+    if not any(
+        policy.uses_row_visible_function(p)
+        for metadata in _metadatas(autogen_context)
+        if "rls_policies" in metadata.info
+        for table_policies in policy.resolved_policies(metadata).values()
+        for p in table_policies
+    ):
+        return None
+    connection = autogen_context.connection
+    assert connection is not None, "RLS autogenerate requires a database connection"
+    body = connection.execute(
+        sa.text("SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure(:signature)"),
+        {"signature": policy.ROW_VISIBLE_FUNCTION_SIGNATURE},
+    ).scalar_one_or_none()
+    if body == policy.ROW_VISIBLE_FUNCTION_BODY:
+        return None
+    return CreateRowVisibleFunctionOp(replaces=body is not None)
+
+
 @_register_late_schema_comparator
 def reorder_policy_operations(
     autogen_context: autogenerate_api.AutogenContext,
@@ -455,6 +570,10 @@ def reorder_policy_operations(
         or not all(isinstance(sub_op, _RLS_OPS) for sub_op in op.ops)
         for op in top_level
     )
+    # Policies may call the helper function, so it is created first.
+    function_op = _row_visible_function_op(autogen_context)
+    if function_op is not None:
+        top_level.insert(0, function_op)
     if not changes_schema:
         return
     drops: list[migrate_ops.MigrateOperation] = []

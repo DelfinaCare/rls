@@ -33,7 +33,14 @@ def create_policies_no_commit(
             f"{Base.__name__} is not registered for RLS; call "
             "rls.register.base_wrapper(Base) before create_policies_no_commit."
         )
-    for table, rls_settings in policy_module.resolved_policies(Base.metadata).items():
+    all_policies = policy_module.resolved_policies(Base.metadata)
+    if any(
+        policy_module.uses_row_visible_function(p)
+        for table_policies in all_policies.values()
+        for p in table_policies
+    ):
+        connection.execute(sqlalchemy.text(policy_module.ROW_VISIBLE_FUNCTION_SQL))
+    for table, rls_settings in all_policies.items():
         if not rls_settings:
             continue
         policy_module.check_unique_policy_names(table, rls_settings)

@@ -194,7 +194,34 @@ This is supported for many-to-one and many-to-many relationships that join on th
 
 A many-to-one relationship is stored on the row itself (its foreign key), so the policy also checks the rows that are written: a book can only be inserted for, or moved to, an author the session can access. The links of the other relationships are stored elsewhere, which has two consequences.
 
-**The association table must be protected.** Whoever can write to the association table of a many-to-many relationship decides who can access the rows it links: a session that could insert a link from somebody else's row to one of its own tags would gain access to that row. `from_relationship` therefore raises a `ValueError` unless the association table has policies of its own. Declare them with `register.table_policies`, the equivalent of `__rls_policies__` for a table without a mapped class:
+**The association table must be protected.** Whoever can write to the association table of a many-to-many relationship decides who can access the rows it links: a session that could insert a link from somebody else's row to one of its own tags would gain access to that row. `from_relationship` therefore raises a `ValueError` unless the association table has policies of its own. The simplest way is to generate them with `link_policies=True`:
+
+```python
+class Book(Base):
+    __tablename__ = "books"
+    id = Column(Integer, primary_key=True)
+    tags = relationship("Tag", secondary=book_tags)
+    __rls_policies__ = [Policy.from_relationship("tags", link_policies=True)]
+```
+
+This adds these policies to `book_tags`:
+
+| command | a session may … | expression |
+|---|---|---|
+| `SELECT` | see a link when it can see the tag | `EXISTS (SELECT 1 FROM tags WHERE tags.id = book_tags.tag_id)` |
+| `INSERT`, `UPDATE`, `DELETE` | create, change or delete a link when it can see both the book and the tag | `rls_row_visible('books'::regclass, 'id', book_tags.book_id) AND EXISTS (…tags…)` |
+
+They take the relationship's `allow_bypass_rls` and `roles`, and they are added to any policies declared with `register.table_policies`.
+
+Checking that the session can see the book needs a helper function. An association-table policy that reads `books` directly is rejected by Postgres with `infinite recursion detected in policy`: the books' policy reads `book_tags`, and Postgres refuses such cycles when it rewrites the query, even though nothing would recurse when it runs. `rls_row_visible(table, key_column, key)` is a plain `SECURITY INVOKER` function that runs `SELECT EXISTS (SELECT 1 FROM <table> WHERE <key_column> = <key>)` as the session, so the books' own policies decide. Its body is planned separately, which avoids the cycle check. Alembic autogenerate creates the function (`create_rls_row_visible_function()`) before the policies that use it, and so does `create_policies_no_commit`. The function is only called when links are written, not when rows are read.
+
+Things to keep in mind with generated link policies:
+
+- A new book has no tags yet, so it is not visible and cannot get its first link: create it and its first link with `bypass_rls()`, or give books another way to be visible (e.g. an owner column).
+- Linking a book to a tag makes it visible to everyone who can see that tag. If tags are shared more widely than books, a session can share a book it can see with that wider audience.
+- They are only generated for a relationship without `condition_arg` that joins each side to the association table on a single column.
+
+To write the association table's policies yourself, declare them with `register.table_policies`, the equivalent of `__rls_policies__` for a table without a mapped class:
 
 ```python
 book_tags = Table(
@@ -245,7 +272,7 @@ This only works when the relationship policy is permissive (the default). Restri
 
 The new row stays inaccessible to its creator until it is linked, and Postgres applies the `SELECT` policies to `INSERT ... RETURNING`, so such inserts cannot return the row (e.g. a server-generated primary key). Creating the row and its first links inside `bypass_rls()`, or adding a policy on a column of the row itself (such as a `created_by` column), avoids both.
 
-`from_relationship` also accepts `cmd` (default `Command.all`), `name` (default `<policy_type>_<relationship>_<comparator name>_<cmd>`), `policy_type`, `allow_bypass_rls` and `roles`, which behave as in [`Policy.from_sqla`](#policyfrom_sqla). It can be mixed with other policies in `__rls_policies__`.
+`from_relationship` also accepts `link_policies` (see [above](#many-to-many-and-one-to-many-relationships)), `cmd` (default `Command.all`), `name` (default `<policy_type>_<relationship>_<comparator name>_<cmd>`), `policy_type`, `allow_bypass_rls` and `roles`, which behave as in [`Policy.from_sqla`](#policyfrom_sqla). It can be mixed with other policies in `__rls_policies__`.
 
 The join condition is only known once SQLAlchemy has configured the mappers, so `from_relationship` returns a `RelationshipPolicy` declaration rather than a `Policy`. Alembic autogenerate and `create_policies_no_commit` resolve it for you (which configures the mappers, so the related model can be defined later in the file or in another module), and that is when the errors above are raised. Call `rls.policy.resolved_policies(Base.metadata)` to resolve and inspect the policies yourself, for example in a test. The policy has to be declared on the model whose table holds the relationship's columns, which matters for joined-table inheritance.
 

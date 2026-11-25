@@ -888,6 +888,143 @@ class TestRelationshipPolicyResolution(unittest.TestCase):
             policy.resolved_policies(Base.metadata)
 
 
+_TAG_VISIBLE = "(EXISTS (SELECT 1 FROM tags WHERE tags.id = book_tags.tag_id))"
+_BOTH_VISIBLE = (
+    "rls_row_visible('books'::regclass, 'id', book_tags.book_id) AND " + _TAG_VISIBLE
+)
+
+
+class TestLinkPolicies(unittest.TestCase):
+    def test_generates_association_table_policies(self) -> None:
+        Base = _library(
+            [policy.Policy.from_relationship("tags", link_policies=True)],
+            link_policies=[],
+        )
+        resolved = typing.cast(
+            list[policy.Policy], policy.resolved_policies(Base.metadata)["book_tags"]
+        )
+        self.assertEqual(
+            [(p.cmd, " ".join(p.expr.split())) for p in resolved],
+            [
+                (policy.Command.select, _TAG_VISIBLE + _BYPASS),
+                (policy.Command.insert, _BOTH_VISIBLE + _BYPASS),
+                (policy.Command.update, _BOTH_VISIBLE + _BYPASS),
+                (policy.Command.delete, _BOTH_VISIBLE + _BYPASS),
+            ],
+        )
+        self.assertTrue(
+            all(
+                p.name.startswith(f"link_books_tags_{p.cmd.value.lower()}_")
+                for p in resolved
+            )
+        )
+        self.assertTrue(all(policy.uses_row_visible_function(p) for p in resolved[1:]))
+        self.assertEqual(
+            Base.metadata.info["rls_modes"]["book_tags"],
+            policy.RlsMode.enable_and_force,
+        )
+        # The relationship policy itself is unchanged.
+        self.assertEqual(len(_exprs(Base, "books")), 1)
+
+    def test_options_apply_to_link_policies(self) -> None:
+        Base = _library(
+            [
+                policy.Policy.from_relationship(
+                    "tags",
+                    link_policies=True,
+                    allow_bypass_rls=False,
+                    roles=["app"],
+                )
+            ],
+            link_policies=[],
+        )
+        resolved = typing.cast(
+            list[policy.Policy], policy.resolved_policies(Base.metadata)["book_tags"]
+        )
+        self.assertEqual(" ".join(resolved[0].expr.split()), _TAG_VISIBLE[1:-1])
+        self.assertTrue(all(p.roles == ("app",) for p in resolved))
+
+    def test_schema_qualified_tables(self) -> None:
+        Base = _library(
+            [policy.Policy.from_relationship("tags", link_policies=True)],
+            link_policies=[],
+            schema="lib",
+        )
+        insert = typing.cast(
+            policy.Policy, policy.resolved_policies(Base.metadata)["lib.book_tags"][1]
+        )
+        self.assertIn(
+            "rls_row_visible('lib.books'::regclass, 'id', lib.book_tags.book_id)",
+            insert.expr,
+        )
+
+    def test_added_to_declared_table_policies(self) -> None:
+        Base = _library([policy.Policy.from_relationship("tags", link_policies=True)])
+        self.assertEqual(
+            _cmds(Base, "book_tags"),
+            [
+                policy.Command.all,
+                policy.Command.select,
+                policy.Command.insert,
+                policy.Command.update,
+                policy.Command.delete,
+            ],
+        )
+
+    def test_not_many_to_many_raises(self) -> None:
+        Base = _library([policy.Policy.from_relationship("author", link_policies=True)])
+        with self.assertRaisesRegex(ValueError, r"Book\.author: .*many-to-many"):
+            policy.resolved_policies(Base.metadata)
+
+    def test_condition_arg_raises(self) -> None:
+        Base = _library(
+            [
+                policy.Policy.from_relationship(
+                    "tags", condition_arg=_ACCOUNT_ID, link_policies=True
+                )
+            ],
+            link_policies=[],
+        )
+        with self.assertRaisesRegex(ValueError, r"Book\.tags: .*condition_arg"):
+            policy.resolved_policies(Base.metadata)
+
+    def test_link_select_policy_is_part_of_the_cycle_check(self) -> None:
+        """The links' SELECT policy reads the tags, so tags must not follow
+        the books."""
+        Base: typing.Any = _new_base()
+        book_tags = sqlalchemy.Table(
+            "book_tags",
+            Base.metadata,
+            sqlalchemy.Column("book_id", sqlalchemy.ForeignKey("books.id")),
+            sqlalchemy.Column("tag_id", sqlalchemy.ForeignKey("tags.id")),
+        )
+
+        class Book(Base):
+            __tablename__ = "books"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            owner_id = sqlalchemy.Column(sqlalchemy.Integer)
+            tags = orm.relationship("Tag", secondary=book_tags)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                *_owner_policies("owner_id"),
+                policy.Policy.from_relationship("tags", link_policies=True),
+            ]
+
+        class Tag(Base):
+            __tablename__ = "tags"
+            id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+            primary_book_id = sqlalchemy.Column(
+                sqlalchemy.Integer, sqlalchemy.ForeignKey("books.id")
+            )
+            primary_book = orm.relationship(Book)
+            __rls_policies__: typing.ClassVar[_Policies] = [
+                policy.Policy.from_relationship("primary_book")
+            ]
+
+        self.assertIn(Tag.__tablename__, Base.metadata.tables)
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            policy.resolved_policies(Base.metadata)
+
+
 class _Context(pydantic.BaseModel):
     account_id: int | None = None
 
@@ -1137,6 +1274,28 @@ class Shelf(Base):
     ]
 
 
+project_tags = sqlalchemy.Table(
+    "project_tags",
+    Base.metadata,
+    sqlalchemy.Column(
+        "project_id", sqlalchemy.ForeignKey("projects.id"), primary_key=True
+    ),
+    sqlalchemy.Column("tag_id", sqlalchemy.ForeignKey("tags.id"), primary_key=True),
+)
+
+
+class Project(Base):
+    """Many-to-many with generated link policies: visible when one of its
+    tags is, and linked to a tag by sessions that can see both."""
+
+    __tablename__ = "projects"
+    id: orm.Mapped[int] = orm.mapped_column(primary_key=True)
+    tags: orm.Mapped[list[Tag]] = orm.relationship(secondary=project_tags)
+    __rls_policies__: typing.ClassVar[_Policies] = [
+        policy.Policy.from_relationship("tags", link_policies=True)
+    ]
+
+
 def _bypass_only(cmd: policy.Command) -> policy.Policy:
     """Nobody passes the expression, so only bypass_rls() sessions do."""
     return policy.Policy.from_sqla(
@@ -1169,7 +1328,15 @@ register.table_policies(
 )
 
 _ROLE = "relationship_user"
-_RELATIONSHIP_TABLES = ("books", "chapters", "reviews", "articles", "shelves")
+_RELATIONSHIP_TABLES = (
+    "books",
+    "chapters",
+    "reviews",
+    "articles",
+    "shelves",
+    "projects",
+)
+_FUNCTIONS = "<functions>"
 
 
 class RelationshipPolicyEndToEndTests(unittest.TestCase):
@@ -1187,11 +1354,19 @@ class RelationshipPolicyEndToEndTests(unittest.TestCase):
             )
             script = autogenerate.produce_migrations(context, Base.metadata)
         assert script.upgrade_ops is not None
-        return {
+        ops: dict[str, list] = {
             table_ops.table_name: list(table_ops.ops)
             for table_ops in script.upgrade_ops.ops
             if isinstance(table_ops, alembic_ops_module.ModifyTableOps)
         }
+        functions = [
+            op
+            for op in script.upgrade_ops.ops
+            if isinstance(op, alembic_ops.CreateRowVisibleFunctionOp)
+        ]
+        if functions:
+            ops[_FUNCTIONS] = functions
+        return ops
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -1225,7 +1400,19 @@ class RelationshipPolicyEndToEndTests(unittest.TestCase):
             )
             connection.execute(
                 sqlalchemy.insert(Tag),
-                [{"id": 1, "owner_id": 1}, {"id": 2, "owner_id": 2}],
+                [
+                    {"id": 1, "owner_id": 1},
+                    {"id": 2, "owner_id": 2},
+                    {"id": 3, "owner_id": 1},
+                ],
+            )
+            connection.execute(
+                sqlalchemy.insert(Project), [{"id": i} for i in range(1, 4)]
+            )
+            # Project 3 has no tags.
+            connection.execute(
+                sqlalchemy.insert(project_tags),
+                [{"project_id": 1, "tag_id": 1}, {"project_id": 2, "tag_id": 2}],
             )
             connection.execute(
                 sqlalchemy.insert(Article), [{"id": i} for i in range(1, 5)]
@@ -1411,12 +1598,87 @@ class RelationshipPolicyEndToEndTests(unittest.TestCase):
                 )
 
     def test_autogenerate_protects_association_tables(self) -> None:
-        for table in ("article_tags", "shelf_owners"):
+        for table, policies in (
+            ("article_tags", 3),
+            ("shelf_owners", 3),
+            ("project_tags", 4),
+        ):
             with self.subTest(table):
                 self.assertEqual(
                     [type(op) for op in self.ops_before[table]],
-                    [alembic_ops.EnableRlsOp] + [alembic_ops.CreatePolicyOp] * 3,
+                    [alembic_ops.EnableRlsOp] + [alembic_ops.CreatePolicyOp] * policies,
                 )
+
+    def test_autogenerate_creates_the_helper_function(self) -> None:
+        (op,) = self.ops_before[_FUNCTIONS]
+        self.assertFalse(op.replaces)
+        self.assertIsInstance(op.reverse(), alembic_ops.DropRowVisibleFunctionOp)
+        rendered = autogenerate.render_python_code(
+            alembic_ops_module.UpgradeOps(ops=[op, op.reverse()])
+        )
+        self.assertIn(
+            "typing.cast(alembic_ops.RLSOp, op).create_rls_row_visible_function()",
+            rendered,
+        )
+        self.assertIn(
+            "typing.cast(alembic_ops.RLSOp, op).drop_rls_row_visible_function()",
+            rendered,
+        )
+
+    def _link(
+        self, account_id: int, project_id: int, tag_id: int, bypass: bool = False
+    ) -> None:
+        with self._session(account_id) as sess:
+            statement = sqlalchemy.insert(project_tags).values(
+                project_id=project_id, tag_id=tag_id
+            )
+            if bypass:
+                with sess.bypass_rls():
+                    sess.execute(statement)
+            else:
+                sess.execute(statement)
+            sess.rollback()
+
+    def test_link_policies_allow_linking_rows_the_session_can_see(self) -> None:
+        self._link(1, project_id=1, tag_id=3)
+
+    def test_link_policies_reject_links_to_rows_the_session_cannot_see(
+        self,
+    ) -> None:
+        for project_id, tag_id in (
+            (2, 3),  # another account's project
+            (1, 2),  # another account's tag
+            (3, 3),  # a project without tags is not visible yet
+        ):
+            with (
+                self.subTest(project_id=project_id, tag_id=tag_id),
+                self.assertRaisesRegex(exc.DBAPIError, "row-level security policy"),
+            ):
+                self._link(1, project_id=project_id, tag_id=tag_id)
+
+    def test_link_policies_allow_bypass(self) -> None:
+        self._link(1, project_id=3, tag_id=3, bypass=True)
+
+    def test_link_policies_read_update_and_delete(self) -> None:
+        with self._session(1) as sess:
+            links = sess.execute(sqlalchemy.select(project_tags)).all()
+            self.assertEqual([tuple(link) for link in links], [(1, 1)])
+            # Another account's link is not deleted.
+            deleted = sess.execute(
+                sqlalchemy.delete(project_tags).where(project_tags.c.project_id == 2)
+            )
+            self.assertEqual(deleted.rowcount, 0)  # type: ignore[attr-defined]
+            updated = sess.execute(sqlalchemy.update(project_tags).values(tag_id=3))
+            self.assertEqual(updated.rowcount, 1)  # type: ignore[attr-defined]
+            sess.rollback()
+        with self._session(1) as sess:
+            with self.assertRaisesRegex(exc.DBAPIError, "row-level security policy"):
+                sess.execute(sqlalchemy.update(project_tags).values(tag_id=2))
+            sess.rollback()
+        with self._session(1) as sess:
+            deleted = sess.execute(sqlalchemy.delete(project_tags))
+            self.assertEqual(deleted.rowcount, 1)  # type: ignore[attr-defined]
+            sess.rollback()
 
     def test_autogenerate_has_no_diff_once_policies_exist(self) -> None:
         self.assertEqual(self.ops_after, {})
@@ -1545,6 +1807,25 @@ class AutogenerateFromEmptyDatabaseTests(unittest.TestCase):
 
         self.assertIn(Book.__tablename__, AlterBase.metadata.tables)
         self._upgrade(AlterBase.metadata)
+
+    def test_outdated_helper_function_is_replaced(self) -> None:
+        self._upgrade(Base.metadata)
+        with self.engine.begin() as connection:
+            connection.execute(
+                sqlalchemy.text(
+                    "CREATE OR REPLACE FUNCTION rls_row_visible("
+                    "tbl regclass, key_column name, key anyelement) "
+                    "RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$"
+                )
+            )
+        with self.engine.connect() as connection:
+            (op,) = self._upgrade_ops(connection)
+        self.assertIsInstance(op, alembic_ops.CreateRowVisibleFunctionOp)
+        self.assertTrue(op.replaces)
+        # The previous version may be used by other policies, so a
+        # downgrade does not drop it.
+        self.assertIsInstance(op.reverse(), alembic_ops.CreateRowVisibleFunctionOp)
+        self._upgrade(Base.metadata)
 
     def _authors_and_books(self, with_enabled: bool) -> typing.Any:
         """Books follow their author; with ``with_enabled``, only enabled
